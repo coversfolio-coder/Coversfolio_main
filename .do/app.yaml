@@ -14,7 +14,7 @@
 # next to each one for where the value comes from.
 
 name: coversfolio
-region: blr
+region: sgp
 
 services:
   - name: backend
