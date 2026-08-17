@@ -1,0 +1,8 @@
+{
+  "tests/test_ai_features.py": true,
+  "tests/test_claims.py": true,
+  "tests/test_policies.py": true,
+  "tests/test_auth_claims_regression.py::test_unauthenticated_dashboard_is_rejected": true,
+  "tests/test_auth_claims_regression.py::test_registration_claim_persistence_and_logout": true,
+  "tests/test_auth_claims_regression.py::test_invalid_login_is_safe": true
+}

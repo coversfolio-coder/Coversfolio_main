@@ -1,0 +1,39 @@
+<svg width="240" height="240" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="35%" y2="100%">
+      <stop offset="0%" stop-color="#116E8C"/>
+      <stop offset="100%" stop-color="#0A4A5E"/>
+    </linearGradient>
+    <linearGradient id="badgeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#14C4A6"/>
+      <stop offset="100%" stop-color="#00A88F"/>
+    </linearGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#0A4A5E" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <!-- Shield -->
+  <path d="M45,32 L195,32 L195,108 C195,162 158,198 120,220 C82,198 45,162 45,108 Z"
+        fill="url(#shieldGrad)" filter="url(#softShadow)"/>
+
+  <!-- Inner hairline for depth -->
+  <path d="M57,42 L183,42 L183,107 C183,153 152,184 120,204 C88,184 57,153 57,107 Z"
+        fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="1.5"/>
+
+  <!-- Document / claim folio -->
+  <g>
+    <path d="M83,64 L137,64 L157,84 L157,158 C157,161.3 154.3,164 151,164 L83,164 C79.7,164 77,161.3 77,158 L77,70 C77,66.7 79.7,64 83,64 Z"
+          fill="#FFFFFF"/>
+    <!-- folded corner -->
+    <path d="M137,64 L137,80 C137,82.2 138.8,84 141,84 L157,84 Z" fill="#CFE8E3"/>
+    <!-- checklist lines -->
+    <line x1="90" y1="100" x2="144" y2="100" stroke="#0D5C75" stroke-width="5.5" stroke-linecap="round" opacity="0.85"/>
+    <line x1="90" y1="118" x2="144" y2="118" stroke="#0D5C75" stroke-width="5.5" stroke-linecap="round" opacity="0.85"/>
+    <line x1="90" y1="136" x2="122" y2="136" stroke="#00A88F" stroke-width="5.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- Verified badge -->
+  <circle cx="168" cy="150" r="26" fill="url(#badgeGrad)" stroke="#FFFFFF" stroke-width="4" filter="url(#softShadow)"/>
+  <path d="M157,150 L165,158 L180,141" fill="none" stroke="#FFFFFF" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
