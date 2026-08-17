@@ -1,18 +1,3 @@
-# DigitalOcean App Platform spec.
-#
-# Deploy with: doctl apps create --spec .do/app.yaml
-# (or connect this repo through the DigitalOcean dashboard: Apps > Create App >
-# GitHub, and it will detect this file automatically)
-#
-# Two components:
-#   - backend: a Docker web service built from backend/Dockerfile
-#   - frontend: a native static site (DigitalOcean builds it directly from
-#     source with the commands below - no Docker or nginx config needed,
-#     and SPA route fallback is handled automatically)
-#
-# Fill in every ${...} placeholder below before deploying - see the comments
-# next to each one for where the value comes from.
-
 name: coversfolio
 region: sgp
 
@@ -21,7 +6,7 @@ services:
     dockerfile_path: backend/Dockerfile
     source_dir: backend
     github:
-      repo: ${YOUR_GITHUB_USERNAME}/${YOUR_REPO_NAME}
+      repo: coversfolio-coder/Coversfolio_main
       branch: main
       deploy_on_push: true
     http_port: 8000
@@ -30,42 +15,31 @@ services:
     routes:
       - path: /api
     envs:
-      # MongoDB Atlas connection string (Atlas > Connect > Drivers) - looks like
-      # mongodb+srv://<user>:<password>@<cluster-url>/?retryWrites=true&w=majority
       - key: MONGO_URL
-        value: ${MONGO_ATLAS_CONNECTION_STRING}
+        value: PASTE_YOUR_NEW_ROTATED_MONGO_CONNECTION_STRING_HERE
         type: SECRET
       - key: DB_NAME
         value: coversfolio_production
-      # Generate once with: python -c "import secrets; print(secrets.token_urlsafe(48))"
-      # then keep it stable - rotating this logs every signed-in user out.
       - key: JWT_SECRET
-        value: ${YOUR_GENERATED_JWT_SECRET}
+        value: NVcgflwV8WEJnbmZQtT6Q4VtvTfKNJ7F_Hw8JfSfURgGaSy6bEbF6-AD2KqubsvN
         type: SECRET
-      # Your real frontend domain, no trailing slash - must be HTTPS in production
       - key: CORS_ORIGINS
-        value: https://${YOUR_DOMAIN}
+        value: https://coversfolio.com
       - key: COOKIE_SECURE
         value: "true"
       - key: STORAGE_BACKEND
         value: s3
       - key: S3_BUCKET
-        value: ${YOUR_SPACES_BUCKET_NAME}
+        value: coversfolio-documents
       - key: S3_ENDPOINT_URL
-        value: ${YOUR_SPACES_ENDPOINT}   # e.g. https://blr1.digitaloceanspaces.com
+        value: https://sgp1.digitaloceanspaces.com
       - key: S3_REGION
-        value: ${YOUR_SPACES_REGION}     # e.g. blr1
+        value: sgp1
       - key: S3_ACCESS_KEY
-        value: ${YOUR_SPACES_ACCESS_KEY}
+        value: PASTE_YOUR_SPACES_ACCESS_KEY_HERE
         type: SECRET
       - key: S3_SECRET_KEY
-        value: ${YOUR_SPACES_SECRET_KEY}
-        type: SECRET
-      # Optional - leave blank to disable that feature entirely, nothing else breaks
-      - key: GOOGLE_CLIENT_ID
-        value: ${YOUR_GOOGLE_CLIENT_ID}
-      - key: GEMINI_API_KEY
-        value: ${YOUR_GEMINI_API_KEY}
+        value: PASTE_YOUR_SPACES_SECRET_KEY_HERE
         type: SECRET
       - key: GEMINI_MODEL
         value: gemini-flash-latest
@@ -74,7 +48,7 @@ static_sites:
   - name: frontend
     source_dir: frontend
     github:
-      repo: ${YOUR_GITHUB_USERNAME}/${YOUR_REPO_NAME}
+      repo: coversfolio-coder/Coversfolio_main
       branch: main
       deploy_on_push: true
     build_command: npm install --legacy-peer-deps && npm run build
@@ -82,15 +56,9 @@ static_sites:
     routes:
       - path: /
     envs:
-      # Must point at the backend service's public URL once you know it -
-      # DigitalOcean assigns this after the backend's first deploy, or use
-      # your real custom domain once DNS is pointed here (see deployment notes).
       - key: REACT_APP_BACKEND_URL
-        value: https://${YOUR_DOMAIN}
-      # Optional - leave blank if not using Google Sign-In
-      - key: REACT_APP_GOOGLE_CLIENT_ID
-        value: ${YOUR_GOOGLE_CLIENT_ID}
+        value: https://coversfolio.com
 
 domains:
-  - domain: ${YOUR_DOMAIN}
+  - domain: coversfolio.com
     type: PRIMARY
