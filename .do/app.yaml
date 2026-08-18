@@ -32,8 +32,8 @@ services:
     envs:
       # MongoDB Atlas connection string (Atlas > Connect > Drivers) - looks like
       # mongodb+srv://<user>:<password>@<cluster-url>/?retryWrites=true&w=majority
-      - key: mongodb+srv://coversfolio_db_user:iVyCrH3LYgGY2jmp@cluster0.qyfynhj.mongodb.net/?appName=Cluster0
-        value: ${MONGO_ATLAS_CONNECTION_STRING}
+      - key: MONGO_URL
+        value: mongodb+srv://coversfolio_db_user:iVyCrH3LYgGY2jmp@cluster0.qyfynhj.mongodb.net/?appName=Cluster0
         type: SECRET
       - key: DB_NAME
         value: coversfolio_production
