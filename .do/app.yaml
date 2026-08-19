@@ -28,7 +28,13 @@ services:
     instance_count: 1
     instance_size_slug: basic-xxs
     routes:
+      # By default DigitalOcean strips the matched path prefix before
+      # forwarding to the container - our FastAPI app registers every route
+      # under /api (e.g. /api/auth/me), so a stripped request arrives as bare
+      # /auth/me and matches nothing, producing a 404 that looks like a
+      # missing endpoint but is really a routing config gap.
       - path: /api
+        preserve_path_prefix: true
     envs:
       # MongoDB Atlas connection string (Atlas > Connect > Drivers) - looks like
       # mongodb+srv://<user>:<password>@<cluster-url>/?retryWrites=true&w=majority
@@ -63,9 +69,9 @@ services:
         type: SECRET
       # Optional - leave blank to disable that feature entirely, nothing else breaks
       - key: GOOGLE_CLIENT_ID
-        value: ${YOUR_GOOGLE_CLIENT_ID}
+        value: 604147662893-2q9hvmfegignf2j8ttsc40bibupnqn5t.apps.googleusercontent.com
       - key: GEMINI_API_KEY
-        value: ${YOUR_GEMINI_API_KEY}
+        value: AQ.Ab8RN6Kfj1CkdDVnFYzeRywkbb3gPIleUx8Wz0Pua_Xz47OxYQ
         type: SECRET
       - key: GEMINI_MODEL
         value: gemini-flash-latest
@@ -89,7 +95,7 @@ static_sites:
         value: https://${YOUR_DOMAIN}
       # Optional - leave blank if not using Google Sign-In
       - key: REACT_APP_GOOGLE_CLIENT_ID
-        value: ${YOUR_GOOGLE_CLIENT_ID}
+        value: 604147662893-2q9hvmfegignf2j8ttsc40bibupnqn5t.apps.googleusercontent.com
 
 domains:
   - domain: ${YOUR_DOMAIN}
