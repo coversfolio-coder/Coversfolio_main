@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import logging
+import asyncio
 import io
 import os
 import re
@@ -702,7 +703,13 @@ def analyze_policy_with_gemini(pdf_bytes: bytes) -> dict:
     if not GEMINI_API_KEY:
         raise AIAnalysisUnavailable("AI analysis is not configured on this server")
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    # Without an explicit timeout, the underlying HTTP client can hang far
+    # longer than DigitalOcean's own gateway timeout - the platform then kills
+    # the connection and returns a generic 504 with no information about what
+    # actually went wrong. Failing fast here, comfortably under the platform's
+    # timeout, means a real error (see below) reaches the person instead of a
+    # bare 504.
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=45_000))
     # Gemini occasionally returns a 503 "currently experiencing high demand -
     # please try again later" - that's Google's own servers being temporarily
     # overloaded, not something wrong with the request, so it's worth a couple
@@ -737,6 +744,9 @@ def analyze_policy_with_gemini(pdf_bytes: bytes) -> dict:
                 logger.warning("Gemini server error (attempt %d/%d), retrying: %s", attempt + 1, max_attempts, exc)
                 time.sleep(2 * (attempt + 1))
                 continue
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            logger.error("Gemini request timed out after 45s: %s", exc)
+            raise AIAnalysisFailed("Gemini didn't respond in time - this can happen with a large or complex document. Try again, or use the standard scan instead.") from exc
         except Exception as exc:
             raise AIAnalysisFailed(str(exc)) from exc
 
@@ -1395,7 +1405,13 @@ async def extract_policy_document_ai(file: UploadFile = File(...), user: dict = 
         raise HTTPException(status_code=400, detail="The uploaded file is empty")
 
     try:
-        analysis = analyze_policy_with_gemini(contents)
+        # analyze_policy_with_gemini is a blocking, synchronous call (network
+        # I/O plus a blocking time.sleep on retry). Calling it directly here
+        # would freeze this server's entire event loop - meaning every other
+        # user's request (login, dashboard, anything) would stall for as long
+        # as this one Gemini call takes. Running it in a worker thread keeps
+        # the rest of the app responsive while this one request waits.
+        analysis = await asyncio.to_thread(analyze_policy_with_gemini, contents)
     except AIAnalysisUnavailable as exc:
         raise HTTPException(status_code=501, detail="AI analysis is not configured on this server yet") from exc
     except AIAnalysisFailed as exc:
@@ -1415,7 +1431,7 @@ async def extract_policy_document_ai_from_existing(document_id: str, user: dict 
     contents, doc = await _load_document_for_extraction(document_id, user, {"application/pdf"})
 
     try:
-        analysis = analyze_policy_with_gemini(contents)
+        analysis = await asyncio.to_thread(analyze_policy_with_gemini, contents)
     except AIAnalysisUnavailable as exc:
         raise HTTPException(status_code=501, detail="AI analysis is not configured on this server yet") from exc
     except AIAnalysisFailed as exc:
