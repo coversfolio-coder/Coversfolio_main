@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import client, { apiError } from "@/api";
-import { ArrowUpRight, BookOpen, Check, FileScan, MapPin, Plus, ShieldQuestion, Sparkles, Trash2, Upload, Users, X } from "lucide-react";
+import { ArrowUpRight, BookOpen, Check, FileScan, FileText, MapPin, Plus, ShieldQuestion, Sparkles, Trash2, Upload, Users, X } from "lucide-react";
 
 const emptyForm = {
   insurer_name: "", policy_number: "", policy_type: "Health",
@@ -128,6 +128,42 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
   };
   const removePerson = (i) => setForm({ ...form, insured_people: form.insured_people.filter((_, idx) => idx !== i) });
 
+  const applyScanFields = (detected) => {
+    // Only fill fields the person hasn't already typed something into - never
+    // overwrite a manual entry with what the scan found.
+    setForm((prev) => {
+      const next = { ...prev };
+      if (!prev.insurer_name.trim() && detected.insurer_name) next.insurer_name = detected.insurer_name;
+      if (!prev.policy_number.trim() && detected.policy_number) next.policy_number = detected.policy_number;
+      if (detected.policy_type && !typeTouched) next.policy_type = detected.policy_type;
+      if (!String(prev.sum_insured).trim() && detected.sum_insured) next.sum_insured = String(detected.sum_insured);
+      if (!prev.start_date && detected.start_date) next.start_date = detected.start_date;
+      if (!prev.end_date && detected.end_date) next.end_date = detected.end_date;
+      const noPeopleEnteredYet = prev.insured_people.every((p) => !p.name.trim());
+      if (noPeopleEnteredYet && detected.insured_people?.length > 0) next.insured_people = detected.insured_people;
+      return next;
+    });
+  };
+
+  const applyAIScanFields = (detected) => {
+    setForm((prev) => {
+      const next = { ...prev };
+      if (!prev.insurer_name.trim() && detected.insurer_name) next.insurer_name = detected.insurer_name;
+      if (!prev.policy_number.trim() && detected.policy_number) next.policy_number = detected.policy_number;
+      if (detected.policy_type && !typeTouched) next.policy_type = detected.policy_type;
+      if (!String(prev.sum_insured).trim() && detected.sum_insured) next.sum_insured = String(detected.sum_insured);
+      if (!prev.start_date && detected.start_date) next.start_date = detected.start_date;
+      if (!prev.end_date && detected.end_date) next.end_date = detected.end_date;
+      return next;
+    });
+    setAiInsights({
+      maternity_cover: detected.maternity_cover,
+      key_sub_limits: detected.key_sub_limits || [],
+      key_exclusions: detected.key_exclusions || [],
+      summary: detected.summary,
+    });
+  };
+
   const onFilePicked = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -139,22 +175,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       formData.append("file", file);
       const res = await client.post("/policies/extract", formData, { headers: { "Content-Type": "multipart/form-data" } });
       const detected = res.data;
-
-      // Only fill fields the person hasn't already typed something into - never
-      // overwrite a manual entry with what the scan found.
-      setForm((prev) => {
-        const next = { ...prev };
-        if (!prev.insurer_name.trim() && detected.insurer_name) next.insurer_name = detected.insurer_name;
-        if (!prev.policy_number.trim() && detected.policy_number) next.policy_number = detected.policy_number;
-        if (detected.policy_type && !typeTouched) next.policy_type = detected.policy_type;
-        if (!String(prev.sum_insured).trim() && detected.sum_insured) next.sum_insured = String(detected.sum_insured);
-        if (!prev.start_date && detected.start_date) next.start_date = detected.start_date;
-        if (!prev.end_date && detected.end_date) next.end_date = detected.end_date;
-        const noPeopleEnteredYet = prev.insured_people.every((p) => !p.name.trim());
-        if (noPeopleEnteredYet && detected.insured_people?.length > 0) next.insured_people = detected.insured_people;
-        return next;
-      });
-
+      applyScanFields(detected);
       const foundCount = ["insurer_name", "policy_number", "policy_type", "sum_insured", "start_date", "end_date"].filter((k) => detected[k]).length + (detected.insured_people?.length > 0 ? 1 : 0);
       setScannedFrom(file.name);
       notify(foundCount > 0 ? `Found ${foundCount} detail${foundCount === 1 ? "" : "s"} in ${file.name}` : `Couldn't detect policy details in ${file.name} - please fill them in manually`);
@@ -172,31 +193,64 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       const formData = new FormData();
       formData.append("file", file);
       const res = await client.post("/policies/extract-ai", formData, { headers: { "Content-Type": "multipart/form-data" } });
-      const detected = res.data;
-
-      setForm((prev) => {
-        const next = { ...prev };
-        if (!prev.insurer_name.trim() && detected.insurer_name) next.insurer_name = detected.insurer_name;
-        if (!prev.policy_number.trim() && detected.policy_number) next.policy_number = detected.policy_number;
-        if (detected.policy_type && !typeTouched) next.policy_type = detected.policy_type;
-        if (!String(prev.sum_insured).trim() && detected.sum_insured) next.sum_insured = String(detected.sum_insured);
-        if (!prev.start_date && detected.start_date) next.start_date = detected.start_date;
-        if (!prev.end_date && detected.end_date) next.end_date = detected.end_date;
-        return next;
-      });
-
-      setAiInsights({
-        maternity_cover: detected.maternity_cover,
-        key_sub_limits: detected.key_sub_limits || [],
-        key_exclusions: detected.key_exclusions || [],
-        summary: detected.summary,
-      });
+      applyAIScanFields(res.data);
       setScannedFrom(file.name);
       notify(`AI analysis complete for ${file.name}`);
     } catch (err) {
       if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet - use the standard scan instead");
       else notify(apiError(err));
     } finally { setAnalyzingAI(false); }
+  };
+
+  // Lets the person pick a document they've already uploaded (in the Documents
+  // vault) to feed into scan/AI-analyze/retro-analyze, instead of being forced
+  // to browse their computer again for a file that's already sitting in the app.
+  const [docPicker, setDocPicker] = useState(null); // { purpose: 'scan' | 'ai' | 'retro-ai', policyId? }
+  const [pickerDocuments, setPickerDocuments] = useState(null);
+  const [pickerBusy, setPickerBusy] = useState(null);
+
+  const openDocPicker = async (purpose, policyId) => {
+    setDocPicker({ purpose, policyId });
+    setPickerDocuments(null);
+    try {
+      const res = await client.get("/documents");
+      const wantedTypes = purpose === "scan"
+        ? ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain"]
+        : ["application/pdf"];
+      const docs = res.data.documents.filter((d) => wantedTypes.includes(d.content_type));
+      // Policy documents the person tagged as such float to the top - most likely what they want here.
+      docs.sort((a, b) => (b.category === "policy_document") - (a.category === "policy_document"));
+      setPickerDocuments(docs);
+    } catch (err) { notify(apiError(err)); setDocPicker(null); }
+  };
+
+  const pickDocument = async (doc) => {
+    setPickerBusy(doc.id);
+    try {
+      if (docPicker.purpose === "scan") {
+        const res = await client.post(`/policies/extract-from-document/${doc.id}`);
+        const detected = res.data;
+        applyScanFields(detected);
+        const foundCount = ["insurer_name", "policy_number", "policy_type", "sum_insured", "start_date", "end_date"].filter((k) => detected[k]).length + (detected.insured_people?.length > 0 ? 1 : 0);
+        setScannedFrom(doc.filename);
+        notify(foundCount > 0 ? `Found ${foundCount} detail${foundCount === 1 ? "" : "s"} in ${doc.filename}` : `Couldn't detect policy details in ${doc.filename} - please fill them in manually`);
+      } else if (docPicker.purpose === "ai") {
+        const res = await client.post(`/policies/extract-ai-from-document/${doc.id}`);
+        applyAIScanFields(res.data);
+        setScannedFrom(doc.filename);
+        notify(`AI analysis complete for ${doc.filename}`);
+      } else if (docPicker.purpose === "retro-ai") {
+        const res = await client.post(`/policies/extract-ai-from-document/${doc.id}`);
+        const { source, ...insights } = res.data;
+        await client.put(`/policies/${docPicker.policyId}`, { ai_insights: insights });
+        notify("AI analysis added to this policy");
+        load();
+      }
+      setDocPicker(null);
+    } catch (err) {
+      if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet");
+      else notify(apiError(err));
+    } finally { setPickerBusy(null); }
   };
 
   const submit = async (e) => {
@@ -320,13 +374,22 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
               </button>
 
               {!detailsPolicy.ai_insights && aiEnabled && canEdit && (
-                <button
-                  type="button" className="text-button" disabled={retroAnalyzing === detailsPolicy.id}
-                  data-testid="details-analyze-ai-button"
-                  onClick={() => retroAiInputRefs.current[detailsPolicy.id]?.click()}
-                >
-                  <Sparkles size={13} /> {retroAnalyzing === detailsPolicy.id ? "Analyzing…" : "Analyze with AI ✨"}
-                </button>
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                  <button
+                    type="button" className="text-button" disabled={retroAnalyzing === detailsPolicy.id}
+                    data-testid="details-analyze-ai-button"
+                    onClick={() => retroAiInputRefs.current[detailsPolicy.id]?.click()}
+                  >
+                    <Sparkles size={13} /> {retroAnalyzing === detailsPolicy.id ? "Analyzing…" : "Analyze with AI ✨"}
+                  </button>
+                  <button
+                    type="button" className="text-button"
+                    data-testid="details-analyze-ai-from-vault-button"
+                    onClick={() => openDocPicker("retro-ai", detailsPolicy.id)}
+                  >
+                    <FileText size={13} /> Choose from Documents
+                  </button>
+                </div>
               )}
             </div>
 
@@ -587,6 +650,13 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 <small>{scannedFrom ? `Last scanned: ${scannedFrom}` : "PDF, Word, or text - we'll fill in what we can find"}</small>
               </span>
             </button>
+            <button
+              type="button" className="text-button" style={{ marginTop: -6, marginBottom: 14 }}
+              data-testid="scan-from-vault-button"
+              onClick={() => openDocPicker("scan")}
+            >
+              <FileText size={13} /> Already uploaded it? Choose from Documents
+            </button>
 
             {aiEnabled && (
               <>
@@ -603,6 +673,13 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                     <strong>{analyzingAI ? "Analyzing with AI…" : "Analyze with AI ✨"}</strong>
                     <small>PDF only - also finds maternity caps, sub-limits, and key exclusions. Sends this document to Google's Gemini API.</small>
                   </span>
+                </button>
+                <button
+                  type="button" className="text-button" style={{ marginTop: -6, marginBottom: 14 }}
+                  data-testid="analyze-ai-from-vault-button"
+                  onClick={() => openDocPicker("ai")}
+                >
+                  <FileText size={13} /> Already uploaded it? Choose from Documents
                 </button>
               </>
             )}
@@ -664,6 +741,52 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
               </div>
               <button className="primary-button" disabled={busy} data-testid="submit-policy-button">{busy ? "Saving…" : "Save policy"}</button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {docPicker && (
+        <div className="modal-backdrop" data-testid="document-picker-modal">
+          <div className="modal" style={{ width: "min(480px, 100%)", maxHeight: "80vh", overflow: "auto" }}>
+            <button className="close-button" aria-label="Close" onClick={() => setDocPicker(null)} data-testid="close-document-picker-button"><X size={18} /></button>
+            <p className="eyebrow">CHOOSE A DOCUMENT</p>
+            <h2>Pick from your uploads</h2>
+            <p className="readonly-hint" style={{ margin: "6px 0 16px" }}>
+              {docPicker.purpose === "ai" || docPicker.purpose === "retro-ai"
+                ? "PDFs you've already uploaded to Documents - pick one to analyze with AI."
+                : "Documents you've already uploaded - pick one to scan for policy details."}
+            </p>
+
+            {pickerDocuments === null ? (
+              <div className="page-loading" data-testid="document-picker-loading">Loading your documents…</div>
+            ) : pickerDocuments.length === 0 ? (
+              <div className="empty-hint" data-testid="document-picker-empty">
+                No matching documents found in your Documents vault yet. Upload one there first, or use the file picker instead.
+              </div>
+            ) : (
+              <div className="entry-list" data-testid="document-picker-list">
+                {pickerDocuments.map((doc) => (
+                  <article className="entry" key={doc.id} data-testid={`document-picker-item-${doc.id}`}>
+                    <header>
+                      <span className="claim-icon" style={{ width: 30, height: 30 }}><FileText size={14} /></span>
+                      <div style={{ flex: 1 }}>
+                        <strong style={{ fontSize: 12 }}>{doc.filename}</strong>
+                        <small style={{ display: "block" }}>
+                          {doc.category === "policy_document" ? "Policy document" : "Other document"} · {new Date(doc.uploaded_at).toLocaleDateString("en-IN")}
+                        </small>
+                      </div>
+                      <button
+                        type="button" className="text-button" disabled={pickerBusy === doc.id}
+                        data-testid={`document-picker-use-${doc.id}`}
+                        onClick={() => pickDocument(doc)}
+                      >
+                        {pickerBusy === doc.id ? "Working…" : "Use this"}
+                      </button>
+                    </header>
+                  </article>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

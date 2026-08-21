@@ -124,6 +124,20 @@ def storage_exists(stored_ref: str) -> bool:
         except Exception:
             return False
     return Path(stored_ref).exists()
+
+
+def storage_load(stored_ref: str) -> bytes:
+    """Reads back the raw bytes of a previously-saved file. Used when a feature
+    needs to re-process a document the person already uploaded (e.g. running AI
+    analysis on a document sitting in the Documents vault) instead of asking
+    them to upload the same file a second time."""
+    if STORAGE_BACKEND == "s3":
+        obj = get_s3_client().get_object(Bucket=S3_BUCKET, Key=stored_ref)
+        return obj["Body"].read()
+    path = Path(stored_ref)
+    if not path.exists():
+        raise FileNotFoundError(stored_ref)
+    return path.read_bytes()
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", 15 * 1024 * 1024))
 ALLOWED_UPLOAD_TYPES = {
     "application/pdf", "image/jpeg", "image/png", "image/webp", "image/heic",
@@ -1321,6 +1335,46 @@ async def extract_policy_document(file: UploadFile = File(...), user: dict = Dep
     return fields
 
 
+async def _load_document_for_extraction(document_id: str, user: dict, allowed_types: set[str]) -> tuple[bytes, dict]:
+    """Fetches a previously-uploaded document's bytes for re-use by an
+    extraction endpoint, so the person can pick something already sitting in
+    their Documents vault instead of uploading the same file again."""
+    doc = await db.documents.find_one({"id": document_id, "household_id": user["household_id"]}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc["content_type"] not in allowed_types:
+        raise HTTPException(status_code=415, detail="This document isn't a supported file type for this feature")
+    try:
+        contents = storage_load(doc["stored_path"])
+    except (FileNotFoundError, Exception) as exc:
+        raise HTTPException(status_code=404, detail="The file for this document is no longer available in storage") from exc
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="This document's stored file is empty")
+    return contents, doc
+
+
+@api_router.post("/policies/extract-from-document/{document_id}")
+async def extract_policy_from_existing_document(document_id: str, user: dict = Depends(current_user)):
+    _require_writer(user)
+    contents, doc = await _load_document_for_extraction(document_id, user, POLICY_EXTRACT_TYPES)
+
+    try:
+        text = extract_document_text(doc["filename"], doc["content_type"], contents)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Could not read this file - it may be corrupted") from exc
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="No readable text found in this file. Scanned image PDFs aren't supported yet - try a digital copy or type the details in manually.")
+
+    table_sum_insured = extract_pdf_table_sum_insured(contents) if doc["content_type"] == "application/pdf" else None
+    fields = parse_policy_fields(text, table_sum_insured=table_sum_insured)
+    if doc["content_type"] == "application/pdf":
+        insured_people = extract_pdf_table_insured_people(contents)
+        if insured_people:
+            fields["insured_people"] = insured_people
+    await audit(user, "policy_document_scanned", f"Scanned already-uploaded '{doc['filename']}' for policy details")
+    return fields
+
+
 @api_router.get("/config")
 async def get_public_config():
     # Lets the frontend know which optional features are actually configured,
@@ -1351,6 +1405,26 @@ async def extract_policy_document_ai(file: UploadFile = File(...), user: dict = 
         raise HTTPException(status_code=502, detail="AI analysis failed - try the standard scan instead") from exc
 
     await audit(user, "policy_document_ai_analyzed", f"AI-analyzed '{file.filename}' for policy details")
+    analysis["source"] = "ai"
+    return analysis
+
+
+@api_router.post("/policies/extract-ai-from-document/{document_id}")
+async def extract_policy_document_ai_from_existing(document_id: str, user: dict = Depends(current_user)):
+    _require_writer(user)
+    contents, doc = await _load_document_for_extraction(document_id, user, {"application/pdf"})
+
+    try:
+        analysis = analyze_policy_with_gemini(contents)
+    except AIAnalysisUnavailable as exc:
+        raise HTTPException(status_code=501, detail="AI analysis is not configured on this server yet") from exc
+    except AIAnalysisFailed as exc:
+        logger.error("Gemini policy analysis failed: %s", exc)
+        if "RESOURCE_EXHAUSTED" in str(exc) or "429" in str(exc):
+            raise HTTPException(status_code=429, detail="You've hit Gemini's daily free-tier limit (20 requests/day) - try again tomorrow, or add billing to your Google AI Studio project for a higher limit") from exc
+        raise HTTPException(status_code=502, detail="AI analysis failed - try the standard scan instead") from exc
+
+    await audit(user, "policy_document_ai_analyzed", f"AI-analyzed already-uploaded '{doc['filename']}' for policy details")
     analysis["source"] = "ai"
     return analysis
 
