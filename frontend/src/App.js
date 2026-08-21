@@ -157,6 +157,42 @@ function App() {
   const [inviteForm, setInviteForm] = useState({ email: "", role: "member" });
   const [openClaimId, setOpenClaimId] = useState(null);
   const canEdit = user && user.role !== "agent";
+
+  // The browser's back button previously had nothing to step back through -
+  // section switches and opening a claim never touched browser history, so
+  // pressing back immediately left the app instead of just closing a modal or
+  // returning to the previous section. This keeps a matching history entry for
+  // each in-app "screen" so back/forward behaves the way people expect.
+  const isPoppingRef = useRef(false);
+  const navigate = (view, claimId = null) => {
+    setActive(view);
+    setOpenClaimId(claimId);
+    if (!isPoppingRef.current) {
+      window.history.pushState({ view, claimId }, "");
+    }
+  };
+  const openClaim = (claimId) => {
+    setOpenClaimId(claimId);
+    if (!isPoppingRef.current) {
+      window.history.pushState({ view: active, claimId }, "");
+    }
+  };
+  useEffect(() => {
+    window.history.replaceState({ view: "workspace", claimId: null }, "");
+    const onPopState = (event) => {
+      isPoppingRef.current = true;
+      const state = event.state || { view: "workspace", claimId: null };
+      setActive(state.view);
+      setOpenClaimId(state.claimId || null);
+      // Reset on next tick, after the resulting re-render has happened, so a
+      // subsequent user-initiated navigate() still pushes its own entry.
+      setTimeout(() => { isPoppingRef.current = false; }, 0);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const refreshDashboard = () => { if (user) client.get(`/dashboard`).then(r => setData(r.data)).catch(() => {}); };
   const signOut = async () => { try { await client.post(`/auth/logout`, {}); } catch (err) {} setUser(false); setData(fallback); setOpenClaimId(null); setShowMembers(false); };
   useEffect(() => {
@@ -176,14 +212,14 @@ function App() {
     <aside className="sidebar" data-testid="primary-sidebar">
       <div className="brand" data-testid="brand-mark"><img className="brand-icon" src="/brand-icon.png" alt="Coversfolio" /><span><span className="brand-covers">Covers</span><span className="brand-folio">folio</span></span></div>
       <div className="household-switcher" data-testid="household-switcher"><span className="avatar">M</span><span><small>HOUSEHOLD</small><strong>{data.household.name}</strong></span><ChevronRight size={15} /></div>
-      <nav className="nav-list" data-testid="main-navigation">{navItems.map(({ label, icon: Icon, id }) => <button key={id} data-testid={`nav-${id}`} className={active === id ? "nav-item active" : "nav-item"} onClick={() => setActive(id)}><Icon size={18} /><span>{label}</span></button>)}<button className="nav-item" data-testid="nav-household" onClick={openMembers}><Users size={18} /><span>Household</span></button></nav>
+      <nav className="nav-list" data-testid="main-navigation">{navItems.map(({ label, icon: Icon, id }) => <button key={id} data-testid={`nav-${id}`} className={active === id ? "nav-item active" : "nav-item"} onClick={() => navigate(id)}><Icon size={18} /><span>{label}</span></button>)}<button className="nav-item" data-testid="nav-household" onClick={openMembers}><Users size={18} /><span>Household</span></button></nav>
       <div className="sidebar-bottom"><button className="nav-item" data-testid="nav-support" onClick={() => notify("Support centre is ready for your questions")}><LifeBuoy size={18} /><span>Support centre</span></button><div className="privacy-note" data-testid="privacy-note"><ShieldCheck size={17} /><span><strong>Your files stay private</strong><small>Encrypted and only shared by you</small></span></div><button className="profile" data-testid="sidebar-profile" onClick={() => document.querySelector('[data-testid="account-menu-trigger"]')?.click()}><Avatar user={user} /><span><strong>{user.name}</strong><small>{user.role === "owner" ? "Household owner" : user.role === "agent" ? "Read-only agent" : "Household member"}</small></span><Menu size={16} /></button></div>
     </aside>
     <main className="main-content">
       <header className="topbar"><div className="crumbs" data-testid="page-breadcrumb"><span>My household</span><ChevronRight size={14} /><strong>{navItems.find(n => n.id === active)?.label || "Claim workspace"}</strong></div><div className="top-actions"><button className="icon-button" aria-label="Search" data-testid="search-button" onClick={() => notify("Search across your claim file")}><Search size={19} /></button><button className="icon-button notification" aria-label="Notifications" data-testid="notifications-button" onClick={() => notify(data.attention.length > 0 ? `You have ${data.attention.length} item${data.attention.length === 1 ? "" : "s"} needing attention` : "You're all caught up")}><Bell size={19} /><i /></button><AccountMenu user={user} onManageAccess={openMembers} onSignOut={signOut} onSupport={() => notify("Support centre is ready for your questions")} /></div></header>
       <div className="content-wrap">
         {active === "workspace" && <>
-        <section className="welcome-row"><div><p className="eyebrow" data-testid="workspace-eyebrow">{new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).toUpperCase()}</p><h1 data-testid="workspace-title">Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, {user.name?.split(" ")[0] || "there"}<span className="title-accent">.</span></h1><p className="lede" data-testid="workspace-subtitle">One clear view of everything moving your claim forward.</p></div><div style={{ display: "flex", gap: 10 }}><button className="outline-button" data-testid="quick-upload-document-button" onClick={() => setActive("documents")}><Upload size={15} /> Upload document</button><button className="primary-button" data-testid="quick-add-policy-button" onClick={() => setActive("policies")}><Plus size={18} /> Add policy</button></div></section>
+        <section className="welcome-row"><div><p className="eyebrow" data-testid="workspace-eyebrow">{new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).toUpperCase()}</p><h1 data-testid="workspace-title">Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, {user.name?.split(" ")[0] || "there"}<span className="title-accent">.</span></h1><p className="lede" data-testid="workspace-subtitle">One clear view of everything moving your claim forward.</p></div><div style={{ display: "flex", gap: 10 }}><button className="outline-button" data-testid="quick-upload-document-button" onClick={() => navigate("documents")}><Upload size={15} /> Upload document</button><button className="primary-button" data-testid="quick-add-policy-button" onClick={() => navigate("policies")}><Plus size={18} /> Add policy</button></div></section>
 
         {data.kpis && <div className="kpi-grid" data-testid="kpi-grid">
           <div className="kpi" data-testid="kpi-active-policies"><div className="k-label">Active policies</div><div className="k-value">{data.kpis.active_policies}</div><div className="k-sub">{data.kpis.insurer_count} insurer{data.kpis.insurer_count === 1 ? "" : "s"}</div></div>
@@ -204,7 +240,7 @@ function App() {
                   key={step.id}
                   className={step.done ? "onboarding-step done" : "onboarding-step"}
                   data-testid={`onboarding-step-${step.id}`}
-                  onClick={() => { if (step.id === "add_policy") setActive("policies"); else if (step.id === "upload_document") setActive("documents"); else if (step.id === "start_claim") setShowNew(true); }}
+                  onClick={() => { if (step.id === "add_policy") navigate("policies"); else if (step.id === "upload_document") navigate("documents"); else if (step.id === "start_claim") setShowNew(true); }}
                 >
                   <span className="onboarding-step-num">{step.done ? <CheckCircle2 size={18} /> : i + 1}</span>
                   <span><strong>{step.label}</strong><small>{step.detail}</small></span>
@@ -237,7 +273,7 @@ function App() {
         </div>
 
         <div className="section">
-          <div className="section-head-row"><span className="section-title">Your policies</span><button className="view-all" data-testid="view-all-policies-button" onClick={() => setActive("policies")} style={{ border: 0, background: "transparent", cursor: "pointer" }}>View all →</button></div>
+          <div className="section-head-row"><span className="section-title">Your policies</span><button className="view-all" data-testid="view-all-policies-button" onClick={() => navigate("policies")} style={{ border: 0, background: "transparent", cursor: "pointer" }}>View all →</button></div>
           {(!data.policies || data.policies.length === 0) ? <p className="empty-hint" data-testid="no-policies-hint">No policies yet. Add one to see it here.</p> : (
             <div className="policy-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 18 }}>
               {data.policies.slice(0, 3).map((p) => {
@@ -275,7 +311,7 @@ function App() {
                       <td><span className={`chip chip-${ready ? "teal" : "amber"}`}>{claim.packet_status || "Not started"}</span></td>
                       <td className="mono">{claim.documents_attached ?? 0}/{claim.documents_total ?? 0} attached</td>
                       <td className="mono">{claim.created_at ? claim.created_at.slice(0, 10) : "—"}</td>
-                      <td><button className="packet-action" data-testid={`open-claim-${claim.id}`} onClick={() => setOpenClaimId(claim.id)}>{ready ? "Download packet" : "Continue"}</button></td>
+                      <td><button className="packet-action" data-testid={`open-claim-${claim.id}`} onClick={() => openClaim(claim.id)}>{ready ? "Download packet" : "Continue"}</button></td>
                     </tr>
                   );
                 })}
@@ -286,13 +322,13 @@ function App() {
         </>}
         {active === "policies" && <PoliciesPage canEdit={canEdit} notify={notify} prefill={policyPrefill} onPrefillConsumed={() => setPolicyPrefill(null)} />}
         {active === "evidence" && <EvidencePage canEdit={canEdit} notify={notify} />}
-        {active === "documents" && <DocumentsPage canEdit={canEdit} notify={notify} onReviewAsPolicy={(detected) => { setPolicyPrefill(detected); setActive("policies"); }} />}
+        {active === "documents" && <DocumentsPage canEdit={canEdit} notify={notify} onReviewAsPolicy={(detected) => { setPolicyPrefill(detected); navigate("policies"); }} />}
       </div>
     </main>
     {showMembers && <div className="modal-backdrop" data-testid="members-modal"><div className="modal members-modal"><button className="close-button" aria-label="Close household access" data-testid="close-members-modal-button" onClick={() => setShowMembers(false)}><X size={18} /></button><p className="eyebrow">HOUSEHOLD ACCESS</p><h2>People in your household</h2><p className="modal-copy">Invite people to help prepare the file. Agents can view but cannot change claims.</p><form className="invite-form" onSubmit={inviteMember} data-testid="invite-member-form"><input required type="email" placeholder="person@example.com" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} data-testid="invite-email-input" /><select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} data-testid="invite-role-select"><option value="member">Household member</option><option value="agent">Read-only agent</option></select><button className="primary-button" data-testid="send-invite-button"><UserPlus size={16} /> Invite</button></form><div className="member-list" data-testid="member-list">{members.members.map(item => <div className={`member-row ${item.status === "revoked" ? "revoked" : ""}`} key={item.id} data-testid={`member-row-${item.id}`}><span className="avatar avatar-small">{item.name.slice(0, 2).toUpperCase()}</span><span><strong>{item.name}</strong><small>{item.email} · {item.role === "agent" ? "Read-only agent" : item.role === "owner" ? "Owner" : "Household member"}</small></span>{item.role !== "owner" && item.status !== "revoked" && <button className="member-action" aria-label={`Revoke ${item.name}`} data-testid={`revoke-member-${item.id}`} onClick={() => revokeMember(item.id)}><UserX size={15} /></button>}{item.status === "revoked" && <em>Revoked</em>}</div>)}{members.invites.map(item => <div className="member-row pending" key={item.id} data-testid={`invite-row-${item.id}`}><span className="avatar avatar-small">?</span><span><strong>{item.email}</strong><small>Pending · {item.role === "agent" ? "Read-only agent" : "Household member"}</small></span><button className="member-action" aria-label="Revoke invitation" data-testid={`revoke-invite-${item.id}`} onClick={() => revokeInvite(item.id)}><X size={15} /></button></div>)}</div><div className="activity-header"><span><History size={15} /> Recent access activity</span><small>{activity.length} events</small></div><div className="activity-list" data-testid="activity-list">{activity.slice(0, 5).map(event => <div className="activity-row" key={event.id}><span className="activity-dot" /><span><strong>{event.actor_name}</strong> {event.detail}<small>{new Date(event.created_at).toLocaleString()}</small></span></div>)}</div></div></div>}
-    {showNew && <div className="modal-backdrop" data-testid="new-claim-modal"><div className="modal"><button className="close-button" aria-label="Close" data-testid="close-new-claim-button" onClick={() => { setShowNew(false); setNewClaimPolicyId(""); }}><X size={18} /></button><p className="eyebrow">START A CLAIM</p><h2>What happened?</h2><p className="modal-copy">Choose a claim type to begin building your file.</p>{data.policies?.length > 0 && <label style={{ display: "block", marginBottom: 16, fontSize: 11, fontWeight: 600 }}>Which policy is this for? (optional)<select value={newClaimPolicyId} onChange={(e) => setNewClaimPolicyId(e.target.value)} data-testid="new-claim-policy-select" style={{ display: "block", width: "100%", marginTop: 6, padding: 10, borderRadius: 6, border: "1px solid var(--line)", fontSize: 12 }}><option value="">Not sure yet</option>{data.policies.map((p) => <option key={p.id} value={p.id}>{p.insurer_name} · {p.policy_type}</option>)}</select></label>}<div className="claim-options"><button data-testid="cashless-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New hospitalisation claim", claim_type: "Cashless", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); setOpenClaimId(response.data.id); notify("Cashless claim saved"); } catch (err) { notify(apiError(err)); } }}><Stethoscope size={20} /><strong>Cashless hospitalisation</strong><small>For planned or emergency care</small></button><button data-testid="reimbursement-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New reimbursement claim", claim_type: "Reimbursement", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); setOpenClaimId(response.data.id); notify("Reimbursement claim saved"); } catch (err) { notify(apiError(err)); } }}><ClipboardCheck size={20} /><strong>Reimbursement</strong><small>For expenses already paid</small></button></div></div></div>}
+    {showNew && <div className="modal-backdrop" data-testid="new-claim-modal"><div className="modal"><button className="close-button" aria-label="Close" data-testid="close-new-claim-button" onClick={() => { setShowNew(false); setNewClaimPolicyId(""); }}><X size={18} /></button><p className="eyebrow">START A CLAIM</p><h2>What happened?</h2><p className="modal-copy">Choose a claim type to begin building your file.</p>{data.policies?.length > 0 && <label style={{ display: "block", marginBottom: 16, fontSize: 11, fontWeight: 600 }}>Which policy is this for? (optional)<select value={newClaimPolicyId} onChange={(e) => setNewClaimPolicyId(e.target.value)} data-testid="new-claim-policy-select" style={{ display: "block", width: "100%", marginTop: 6, padding: 10, borderRadius: 6, border: "1px solid var(--line)", fontSize: 12 }}><option value="">Not sure yet</option>{data.policies.map((p) => <option key={p.id} value={p.id}>{p.insurer_name} · {p.policy_type}</option>)}</select></label>}<div className="claim-options"><button data-testid="cashless-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New hospitalisation claim", claim_type: "Cashless", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Cashless claim saved"); } catch (err) { notify(apiError(err)); } }}><Stethoscope size={20} /><strong>Cashless hospitalisation</strong><small>For planned or emergency care</small></button><button data-testid="reimbursement-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New reimbursement claim", claim_type: "Reimbursement", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Reimbursement claim saved"); } catch (err) { notify(apiError(err)); } }}><ClipboardCheck size={20} /><strong>Reimbursement</strong><small>For expenses already paid</small></button></div></div></div>}
     {toast && <div className="toast" role="status" data-testid="toast-message"><Check size={16} />{toast}</div>}
-    {openClaimId && <ClaimDetail claimId={openClaimId} canEdit={canEdit} onClose={() => setOpenClaimId(null)} onChange={refreshDashboard} notify={notify} />}
+    {openClaimId && <ClaimDetail claimId={openClaimId} canEdit={canEdit} onClose={() => window.history.back()} onChange={refreshDashboard} notify={notify} />}
   </div>;
 }
 export default App;
