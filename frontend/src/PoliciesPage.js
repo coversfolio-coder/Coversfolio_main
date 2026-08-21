@@ -21,16 +21,23 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
   const [hospitalResult, setHospitalResult] = useState(null);
   const [hospitalLoading, setHospitalLoading] = useState(false);
   const [locating, setLocating] = useState(false);
-  const [coveragePolicy, setCoveragePolicy] = useState(null);
-  const [benefitsPolicy, setBenefitsPolicy] = useState(null);
+  // One modal now shows everything stored about a policy - basic details, AI
+  // coverage insights, and maximize-benefits - instead of three separate ones.
+  const [detailsPolicy, setDetailsPolicy] = useState(null);
   const [loggingCheckup, setLoggingCheckup] = useState(false);
+
+  const openDetails = (policy) => {
+    setDetailsPolicy(policy);
+    setConditionQuery("");
+    setConditionResult(null);
+  };
 
   const logCheckupUsed = async (policyId) => {
     setLoggingCheckup(true);
     try {
       const today = new Date().toISOString().slice(0, 10);
       const res = await client.put(`/policies/${policyId}`, { health_checkup_last_used_date: today });
-      setBenefitsPolicy(res.data);
+      setDetailsPolicy(res.data);
       notify("Logged - noted today as when you used it");
       load();
     } catch (err) { notify(apiError(err)); } finally { setLoggingCheckup(false); }
@@ -85,7 +92,12 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
     client.get("/config").then((r) => setAiEnabled(Boolean(r.data.ai_enabled))).catch(() => setAiEnabled(false));
   }, []);
 
-  const load = () => client.get("/policies").then((r) => setPolicies(r.data.policies)).catch((err) => notify(apiError(err)));
+  const load = () => client.get("/policies").then((r) => {
+    setPolicies(r.data.policies);
+    // Keep an already-open details modal showing fresh data (e.g. right after
+    // an "Analyze with AI" pass completes) instead of stale pre-analysis info.
+    setDetailsPolicy((prev) => (prev ? r.data.policies.find((p) => p.id === prev.id) || prev : prev));
+  }).catch((err) => notify(apiError(err)));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
 
@@ -226,72 +238,112 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       ) : (
         <div className="card-grid" data-testid="policies-list">
           {policies.map((p) => (
-            <article className="entry policy-card" key={p.id} data-testid={`policy-${p.id}`}>
+            <article
+              className="entry policy-card policy-card-clickable"
+              key={p.id}
+              data-testid={`policy-${p.id}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => openDetails(p)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetails(p); } }}
+            >
               <header>
                 <span className="claim-icon" style={{ width: 36, height: 36 }}><BookOpen size={16} /></span>
                 <div style={{ flex: 1 }}>
                   <strong>{p.insurer_name}</strong>
                   <small style={{ display: "block" }}>{p.policy_number} · {p.policy_type}</small>
                 </div>
-                {canEdit && <button className="icon-button" aria-label="Remove policy" data-testid={`remove-policy-${p.id}`} onClick={() => remove(p.id)}><Trash2 size={15} /></button>}
+                {canEdit && (
+                  <button
+                    className="icon-button" aria-label="Remove policy" data-testid={`remove-policy-${p.id}`}
+                    onClick={(e) => { e.stopPropagation(); remove(p.id); }}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                )}
               </header>
               <p><em>Sum insured:</em> ₹{Number(p.sum_insured).toLocaleString("en-IN")}</p>
               <p><em>Valid:</em> {p.start_date} to {p.end_date}</p>
               {p.insured_people?.length > 0 && (
                 <p><em><Users size={12} style={{ verticalAlign: -2 }} /> Covered:</em> {p.insured_people.map((person) => person.name).join(", ")}</p>
               )}
-              <button type="button" className="text-button" style={{ marginTop: 8 }} data-testid={`find-hospitals-${p.id}`} onClick={() => { setHospitalPolicy(p); setHospitalCity(""); setHospitalResult(null); }}>
-                <MapPin size={13} /> Find network hospitals
-              </button>
-              {p.ai_insights ? (
-                <>
-                  <button type="button" className="text-button" style={{ marginTop: 4, marginLeft: 14 }} data-testid={`coverage-details-${p.id}`} onClick={() => { setCoveragePolicy(p); setConditionQuery(""); setConditionResult(null); }}>
-                    <ShieldQuestion size={13} /> Coverage &amp; waiting periods
-                  </button>
-                  {p.benefits && Object.keys(p.benefits).length > 0 && (
-                    <button type="button" className="text-button" style={{ marginTop: 4, marginLeft: 14 }} data-testid={`maximize-policy-${p.id}`} onClick={() => setBenefitsPolicy(p)}>
-                      <Sparkles size={13} /> Maximize this policy
-                    </button>
-                  )}
-                </>
-              ) : (
-                aiEnabled && canEdit && (
-                  <>
-                    <input
-                      ref={(el) => { retroAiInputRefs.current[p.id] = el; }}
-                      type="file" hidden accept=".pdf"
-                      onChange={(e) => onRetroAnalyze(p.id, e)}
-                      data-testid={`retro-ai-input-${p.id}`}
-                    />
-                    <button
-                      type="button" className="text-button" style={{ marginTop: 4, marginLeft: 14 }}
-                      disabled={retroAnalyzing === p.id}
-                      data-testid={`analyze-existing-policy-${p.id}`}
-                      onClick={() => retroAiInputRefs.current[p.id]?.click()}
-                    >
-                      <Sparkles size={13} /> {retroAnalyzing === p.id ? "Analyzing…" : "Analyze with AI"}
-                    </button>
-                  </>
-                )
+
+              {!p.ai_insights && aiEnabled && canEdit && (
+                <input
+                  ref={(el) => { retroAiInputRefs.current[p.id] = el; }}
+                  type="file" hidden accept=".pdf"
+                  onChange={(e) => onRetroAnalyze(p.id, e)}
+                  data-testid={`retro-ai-input-${p.id}`}
+                />
               )}
+
+              <button
+                type="button"
+                className="text-button policy-view-details-button"
+                style={{ marginTop: 10 }}
+                data-testid={`view-details-${p.id}`}
+                onClick={(e) => { e.stopPropagation(); openDetails(p); }}
+              >
+                <ShieldQuestion size={13} /> View details <ArrowUpRight size={13} />
+              </button>
             </article>
           ))}
         </div>
       )}
 
-      {coveragePolicy && (
-        <div className="modal-backdrop" data-testid="coverage-modal">
-          <div className="modal" style={{ width: "min(560px, 100%)", maxHeight: "85vh", overflow: "auto" }}>
-            <button className="close-button" aria-label="Close" onClick={() => setCoveragePolicy(null)} data-testid="close-coverage-modal-button"><X size={18} /></button>
-            <p className="eyebrow">AI-GENERATED — VERIFY AGAINST YOUR POLICY DOCUMENT</p>
-            <h2>{coveragePolicy.insurer_name} coverage</h2>
+      {detailsPolicy && (
+        <div className="modal-backdrop" data-testid="policy-details-modal">
+          <div className="modal" style={{ width: "min(600px, 100%)", maxHeight: "88vh", overflow: "auto" }}>
+            <button className="close-button" aria-label="Close" onClick={() => setDetailsPolicy(null)} data-testid="close-policy-details-modal-button"><X size={18} /></button>
+            <p className="eyebrow">POLICY DETAILS</p>
+            <h2>{detailsPolicy.insurer_name}</h2>
+            <p className="readonly-hint" style={{ margin: "4px 0 18px" }}>{detailsPolicy.policy_number} · {detailsPolicy.policy_type}</p>
 
-            {coveragePolicy.ai_insights?.summary && (
-              <p style={{ fontSize: 12, color: "var(--muted)", margin: "10px 0 18px", lineHeight: 1.5 }}>{coveragePolicy.ai_insights.summary}</p>
+            {/* Basic details - always available, no AI required */}
+            <div className="entry" style={{ marginBottom: 12 }} data-testid="policy-basic-details">
+              <p><em>Sum insured:</em> ₹{Number(detailsPolicy.sum_insured).toLocaleString("en-IN")}</p>
+              <p><em>Valid:</em> {detailsPolicy.start_date} to {detailsPolicy.end_date}</p>
+              {detailsPolicy.insured_people?.length > 0 && (
+                <p>
+                  <em><Users size={12} style={{ verticalAlign: -2 }} /> Covered people:</em>{" "}
+                  {detailsPolicy.insured_people.map((person) => `${person.name}${person.relation ? ` (${person.relation})` : ""}`).join(", ")}
+                </p>
+              )}
+            </div>
+
+            <div className="stack-form" style={{ marginBottom: 18 }}>
+              <button
+                type="button" className="text-button" data-testid="details-find-hospitals-button"
+                onClick={() => { setHospitalPolicy(detailsPolicy); setHospitalCity(""); setHospitalResult(null); }}
+              >
+                <MapPin size={13} /> Find network hospitals
+              </button>
+
+              {!detailsPolicy.ai_insights && aiEnabled && canEdit && (
+                <button
+                  type="button" className="text-button" disabled={retroAnalyzing === detailsPolicy.id}
+                  data-testid="details-analyze-ai-button"
+                  onClick={() => retroAiInputRefs.current[detailsPolicy.id]?.click()}
+                >
+                  <Sparkles size={13} /> {retroAnalyzing === detailsPolicy.id ? "Analyzing…" : "Analyze with AI ✨"}
+                </button>
+              )}
+            </div>
+
+            {!detailsPolicy.ai_insights && (
+              <div className="empty-hint" data-testid="details-no-ai-yet" style={{ marginBottom: 18 }}>
+                {aiEnabled
+                  ? "No AI analysis yet for this policy. Analyze it to see maternity cover, sub-limits, exclusions, waiting periods, and personalized benefits below."
+                  : "AI analysis isn't set up on this server yet, so coverage breakdowns and benefits aren't available - basic details above are still accurate."}
+              </div>
             )}
 
-            {(() => {
-              const insights = coveragePolicy.ai_insights || {};
+            {detailsPolicy.ai_insights?.summary && (
+              <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 18px", lineHeight: 1.5 }}>{detailsPolicy.ai_insights.summary}</p>
+            )}
+
+            {detailsPolicy.ai_insights && (() => {
+              const insights = detailsPolicy.ai_insights || {};
               const hasPreExisting = insights.pre_existing_disease_waiting_months != null;
               const hasNamedConditions = insights.waiting_periods?.length > 0;
               const hasExclusions = insights.key_exclusions?.length > 0;
@@ -365,7 +417,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                     onClick={async () => {
                       setConditionChecking(true);
                       try {
-                        const res = await client.get(`/policies/${coveragePolicy.id}/check-condition`, { params: { condition: conditionQuery } });
+                        const res = await client.get(`/policies/${detailsPolicy.id}/check-condition`, { params: { condition: conditionQuery } });
                         setConditionResult(res.data);
                       } catch (err) { notify(apiError(err)); } finally { setConditionChecking(false); }
                     }}
@@ -398,78 +450,72 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      )}
 
-      {benefitsPolicy && (
-        <div className="modal-backdrop" data-testid="benefits-modal">
-          <div className="modal" style={{ width: "min(560px, 100%)", maxHeight: "85vh", overflow: "auto" }}>
-            <button className="close-button" aria-label="Close" onClick={() => setBenefitsPolicy(null)} data-testid="close-benefits-modal-button"><X size={18} /></button>
-            <p className="eyebrow">AI-GENERATED — VERIFY AGAINST YOUR POLICY DOCUMENT</p>
-            <h2>Maximize {benefitsPolicy.insurer_name}</h2>
-            <p className="readonly-hint" style={{ margin: "10px 0 18px" }}>
-              What you're actually eligible to use right now, based on what was found in your policy document - not a generic list of "things health policies usually have."
-            </p>
+            {/* Benefits - what you're actually eligible to use right now, based on this policy's own document */}
+            {detailsPolicy.benefits && Object.keys(detailsPolicy.benefits).length > 0 && (
+              <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16, marginTop: 4 }}>
+                <p className="eyebrow" style={{ marginBottom: 8 }}>MAXIMIZE THIS POLICY</p>
 
-            {benefitsPolicy.benefits?.health_checkup && (
-              <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-health-checkup">
-                <header>
-                  <div style={{ flex: 1 }}><strong>Free annual health checkup</strong></div>
-                  {benefitsPolicy.benefits.health_checkup.eligible_now === true && <span className="chip chip-teal">Eligible now</span>}
-                  {benefitsPolicy.benefits.health_checkup.eligible_now === false && <span className="chip chip-amber">Next eligible {benefitsPolicy.benefits.health_checkup.next_eligible_date}</span>}
-                </header>
-                {benefitsPolicy.benefits.health_checkup.notes && <p style={{ fontSize: 12, margin: "6px 0 8px" }}>{benefitsPolicy.benefits.health_checkup.notes}</p>}
-                {benefitsPolicy.benefits.health_checkup.last_used_date && (
-                  <p style={{ fontSize: 11, color: "var(--muted)", margin: "0 0 8px" }}>Last logged as used: {benefitsPolicy.benefits.health_checkup.last_used_date}</p>
+                {detailsPolicy.benefits.health_checkup && (
+                  <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-health-checkup">
+                    <header>
+                      <div style={{ flex: 1 }}><strong>Free annual health checkup</strong></div>
+                      {detailsPolicy.benefits.health_checkup.eligible_now === true && <span className="chip chip-teal">Eligible now</span>}
+                      {detailsPolicy.benefits.health_checkup.eligible_now === false && <span className="chip chip-amber">Next eligible {detailsPolicy.benefits.health_checkup.next_eligible_date}</span>}
+                    </header>
+                    {detailsPolicy.benefits.health_checkup.notes && <p style={{ fontSize: 12, margin: "6px 0 8px" }}>{detailsPolicy.benefits.health_checkup.notes}</p>}
+                    {detailsPolicy.benefits.health_checkup.last_used_date && (
+                      <p style={{ fontSize: 11, color: "var(--muted)", margin: "0 0 8px" }}>Last logged as used: {detailsPolicy.benefits.health_checkup.last_used_date}</p>
+                    )}
+                    {canEdit && (
+                      <button type="button" className="text-button" disabled={loggingCheckup} onClick={() => logCheckupUsed(detailsPolicy.id)} data-testid="log-checkup-used-button">
+                        <Check size={13} /> {loggingCheckup ? "Saving…" : "I used this today"}
+                      </button>
+                    )}
+                  </div>
                 )}
-                {canEdit && (
-                  <button type="button" className="text-button" disabled={loggingCheckup} onClick={() => logCheckupUsed(benefitsPolicy.id)} data-testid="log-checkup-used-button">
-                    <Check size={13} /> {loggingCheckup ? "Saving…" : "I used this today"}
-                  </button>
+
+                {detailsPolicy.benefits.restoration_benefit && (
+                  <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-restoration">
+                    <header>
+                      <div style={{ flex: 1 }}><strong>Restoration benefit</strong></div>
+                      {detailsPolicy.benefits.restoration_benefit.relevant_now && <span className="chip chip-amber">Your sum insured looks exhausted - relevant now</span>}
+                    </header>
+                    {detailsPolicy.benefits.restoration_benefit.notes && <p style={{ fontSize: 12, margin: "6px 0 0" }}>{detailsPolicy.benefits.restoration_benefit.notes}</p>}
+                  </div>
                 )}
-              </div>
-            )}
 
-            {benefitsPolicy.benefits?.restoration_benefit && (
-              <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-restoration">
-                <header>
-                  <div style={{ flex: 1 }}><strong>Restoration benefit</strong></div>
-                  {benefitsPolicy.benefits.restoration_benefit.relevant_now && <span className="chip chip-amber">Your sum insured looks exhausted - relevant now</span>}
-                </header>
-                {benefitsPolicy.benefits.restoration_benefit.notes && <p style={{ fontSize: 12, margin: "6px 0 0" }}>{benefitsPolicy.benefits.restoration_benefit.notes}</p>}
-              </div>
-            )}
+                {detailsPolicy.benefits.no_claim_bonus && (
+                  <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-ncb">
+                    <strong style={{ fontSize: 13 }}>No-claim bonus</strong>
+                    {detailsPolicy.benefits.no_claim_bonus.notes && <p style={{ fontSize: 12, margin: "6px 0 0" }}>{detailsPolicy.benefits.no_claim_bonus.notes}</p>}
+                  </div>
+                )}
 
-            {benefitsPolicy.benefits?.no_claim_bonus && (
-              <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-ncb">
-                <strong style={{ fontSize: 13 }}>No-claim bonus</strong>
-                {benefitsPolicy.benefits.no_claim_bonus.notes && <p style={{ fontSize: 12, margin: "6px 0 0" }}>{benefitsPolicy.benefits.no_claim_bonus.notes}</p>}
-              </div>
-            )}
+                {detailsPolicy.benefits.newly_usable_conditions?.length > 0 && (
+                  <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-newly-usable">
+                    <strong style={{ fontSize: 13 }}>Already usable - waiting periods have passed</strong>
+                    <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12 }}>
+                      {detailsPolicy.benefits.newly_usable_conditions.map((cond, i) => <li key={i}>{cond}</li>)}
+                    </ul>
+                  </div>
+                )}
 
-            {benefitsPolicy.benefits?.newly_usable_conditions?.length > 0 && (
-              <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-newly-usable">
-                <strong style={{ fontSize: 13 }}>Already usable - waiting periods have passed</strong>
-                <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12 }}>
-                  {benefitsPolicy.benefits.newly_usable_conditions.map((cond, i) => <li key={i}>{cond}</li>)}
-                </ul>
-              </div>
-            )}
+                {detailsPolicy.benefits.other_benefits?.length > 0 && (
+                  <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-other">
+                    <strong style={{ fontSize: 13 }}>Other included benefits &amp; services</strong>
+                    <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12 }}>
+                      {detailsPolicy.benefits.other_benefits.map((b, i) => <li key={i}>{b}</li>)}
+                    </ul>
+                  </div>
+                )}
 
-            {benefitsPolicy.benefits?.other_benefits?.length > 0 && (
-              <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-other">
-                <strong style={{ fontSize: 13 }}>Other included benefits &amp; services</strong>
-                <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12 }}>
-                  {benefitsPolicy.benefits.other_benefits.map((b, i) => <li key={i}>{b}</li>)}
-                </ul>
-              </div>
-            )}
-
-            {benefitsPolicy.benefits?.renewal_reminder && (
-              <div className="attention-strip" data-testid="benefit-renewal-reminder">
-                <div className="attention-icon"><ShieldQuestion size={20} /></div>
-                <div><strong>Renewing soon</strong><span>{benefitsPolicy.benefits.renewal_reminder}</span></div>
+                {detailsPolicy.benefits.renewal_reminder && (
+                  <div className="attention-strip" data-testid="benefit-renewal-reminder">
+                    <div className="attention-icon"><ShieldQuestion size={20} /></div>
+                    <div><strong>Renewing soon</strong><span>{detailsPolicy.benefits.renewal_reminder}</span></div>
+                  </div>
+                )}
               </div>
             )}
           </div>

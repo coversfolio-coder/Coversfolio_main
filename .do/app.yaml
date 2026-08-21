@@ -69,9 +69,9 @@ services:
         type: SECRET
       # Optional - leave blank to disable that feature entirely, nothing else breaks
       - key: GOOGLE_CLIENT_ID
-        value: 604147662893-2q9hvmfegignf2j8ttsc40bibupnqn5t.apps.googleusercontent.com
+        value: ${YOUR_GOOGLE_CLIENT_ID}
       - key: GEMINI_API_KEY
-        value: AQ.Ab8RN6Kfj1CkdDVnFYzeRywkbb3gPIleUx8Wz0Pua_Xz47OxYQ
+        value: ${YOUR_GEMINI_API_KEY}
         type: SECRET
       - key: GEMINI_MODEL
         value: gemini-flash-latest
@@ -95,7 +95,7 @@ static_sites:
         value: https://${YOUR_DOMAIN}
       # Optional - leave blank if not using Google Sign-In
       - key: REACT_APP_GOOGLE_CLIENT_ID
-        value: 604147662893-2q9hvmfegignf2j8ttsc40bibupnqn5t.apps.googleusercontent.com
+        value: ${YOUR_GOOGLE_CLIENT_ID}
 
 domains:
   - domain: ${YOUR_DOMAIN}
