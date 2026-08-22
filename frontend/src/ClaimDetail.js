@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import client, { API, apiError } from "@/api";
 import {
   X, FileText, MessageSquare, IndianRupee, Milestone, AlertTriangle,
@@ -59,8 +59,21 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   const [settlement, setSettlement] = useState({ amount: "", kind: "partial", note: "" });
   const [stage, setStage] = useState({ stage: STAGES[0].label, progress: STAGES[0].progress, note: "" });
   const [reason, setReason] = useState("");
-  const [hospForm, setHospForm] = useState({ patient_name: "", hospital_name: "", admission_date: "", discharge_date: "", diagnosis: "", is_maternity: false });
+  const [hospForm, setHospForm] = useState({
+    patient_name: "", hospital_name: "", admission_date: "", discharge_date: "", diagnosis: "", is_maternity: false,
+    has_other_insurance: false, other_insurer_name: "", first_insurance_start_date: "",
+    hospitalized_last_4_years: false, previously_covered_other_insurance: false,
+    patient_gender: "", patient_dob: "", patient_relationship: "", patient_occupation: "",
+    patient_address: "", patient_phone: "", patient_email: "",
+    room_category: "", hospitalization_cause: "", date_of_onset: "", admission_time: "", discharge_time: "",
+    medico_legal: false, injury_cause: "", reported_to_police: false, mlc_report_attached: false, system_of_medicine: "",
+  });
   const [savingHosp, setSavingHosp] = useState(false);
+  // Section G on the real claim form (PAN, bank account, IFSC) is sensitive
+  // financial data the app has no reason to store or transmit - it's only
+  // needed once, by the person themselves, to copy onto the paper/PDF form.
+  // Kept in component state only: never sent to the backend, cleared on reload.
+  const [bankForm, setBankForm] = useState({ tpa_membership_id: "", pan_number: "", bank_account_holder: "", bank_account_number: "", bank_name_branch: "", cheque_payable_name: "", ifsc_code: "" });
 
   const load = async () => {
     try {
@@ -70,6 +83,18 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
         patient_name: res.data.patient_name || "", hospital_name: res.data.hospital_name || "",
         admission_date: res.data.admission_date || "", discharge_date: res.data.discharge_date || "",
         diagnosis: res.data.diagnosis || "", is_maternity: !!res.data.is_maternity,
+        has_other_insurance: !!res.data.has_other_insurance, other_insurer_name: res.data.other_insurer_name || "",
+        first_insurance_start_date: res.data.first_insurance_start_date || "",
+        hospitalized_last_4_years: !!res.data.hospitalized_last_4_years,
+        previously_covered_other_insurance: !!res.data.previously_covered_other_insurance,
+        patient_gender: res.data.patient_gender || "", patient_dob: res.data.patient_dob || "",
+        patient_relationship: res.data.patient_relationship || "", patient_occupation: res.data.patient_occupation || "",
+        patient_address: res.data.patient_address || "", patient_phone: res.data.patient_phone || "", patient_email: res.data.patient_email || "",
+        room_category: res.data.room_category || "", hospitalization_cause: res.data.hospitalization_cause || "",
+        date_of_onset: res.data.date_of_onset || "", admission_time: res.data.admission_time || "", discharge_time: res.data.discharge_time || "",
+        medico_legal: !!res.data.medico_legal, injury_cause: res.data.injury_cause || "",
+        reported_to_police: !!res.data.reported_to_police, mlc_report_attached: !!res.data.mlc_report_attached,
+        system_of_medicine: res.data.system_of_medicine || "",
       });
       const slaRes = await client.get(`/claims/${claimId}/sla`);
       setSla(slaRes.data);
@@ -295,13 +320,39 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
 
           {tab === "claimform" && (
             <section data-testid="tab-panel-claimform">
-              <p className="readonly-hint" style={{ marginBottom: 14 }}>
-                Enter the hospitalization details once, and this compiles a reference summary from your linked documents - bills sorted into pre/during/post-hospitalization with real totals, plus the document checklist. It doesn't replace the insurer's own Claim Form Part A (needs your signature) or Part B (needs the hospital's), but it makes filling either one transcription instead of a from-scratch reconstruction.
+              <p className="readonly-hint" style={{ marginBottom: 18 }}>
+                Enter the hospitalization details once, and this compiles a reference summary from your linked documents - bills sorted into pre/during/post-hospitalization with real totals, plus a field-by-field cheat sheet for the insurer's own form. It doesn't replace the insurer's Claim Form Part A (needs your signature) or Part B (needs the hospital's) - it makes filling either one transcription instead of a from-scratch reconstruction.
               </p>
 
+              {(() => {
+                const detailsDone = !!(hospForm.patient_name && hospForm.hospital_name && hospForm.admission_date && hospForm.discharge_date);
+                const billsDone = !!(claimForm && claimForm.grand_total > 0);
+                const sheetReady = detailsDone && billsDone;
+                const steps = [
+                  { label: "Hospitalization details", done: detailsDone, hint: detailsDone ? "Saved" : "Fill in below" },
+                  { label: "Bills & documents", done: billsDone, hint: billsDone ? `${inr(claimForm?.grand_total)} logged` : "Upload bills with amounts" },
+                  { label: "Cheat sheet & export", done: sheetReady, hint: sheetReady ? "Ready to copy" : "Complete steps 1-2" },
+                ];
+                return (
+                  <div className="cf-steps" data-testid="claimform-step-tracker">
+                    {steps.map((s, i) => (
+                      <div key={s.label} className={`cf-step ${s.done ? "done" : !steps[i - 1] || steps[i - 1].done ? "active" : ""}`} data-testid={`claimform-step-${i + 1}`}>
+                        <strong>{i + 1}. {s.label}</strong>
+                        <span>{s.hint}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              <div className="cf-card">
+                <div className="cf-card-head">
+                  <h3>Hospitalization details</h3>
+                  <p>The core facts every insurer's form asks for - fill in what you know, the rest can wait.</p>
+                </div>
               <form
                 className="stack-form"
-                style={{ marginBottom: 20, paddingBottom: 16, borderBottom: "1px solid var(--line)" }}
+                style={{ marginBottom: 0, paddingBottom: 0, border: 0 }}
                 onSubmit={saveHospitalization}
                 data-testid="hospitalization-form"
               >
@@ -318,72 +369,246 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                   <input type="checkbox" checked={!!hospForm.is_maternity} onChange={(e) => setHospForm({ ...hospForm, is_maternity: e.target.checked })} data-testid="hosp-maternity-checkbox" disabled={!canEdit} style={{ width: "auto" }} />
                   This is a maternity claim (adds the obstetric-history requirement to the checklist)
                 </label>
-                {canEdit && <button className="primary-button" type="submit" disabled={savingHosp} data-testid="save-hospitalization-button" style={{ justifySelf: "start" }}>{savingHosp ? "Saving…" : "Save hospitalization details"}</button>}
+
+                <p className="eyebrow" style={{ marginTop: 10 }}>PATIENT DETAILS (SECTION C)</p>
+                <div className="row-2">
+                  <label>Gender
+                    <select value={hospForm.patient_gender} onChange={(e) => setHospForm({ ...hospForm, patient_gender: e.target.value })} data-testid="hosp-patient-gender-select" disabled={!canEdit}>
+                      <option value="">Not set</option><option value="Male">Male</option><option value="Female">Female</option>
+                    </select>
+                  </label>
+                  <label>Date of birth<input type="date" value={hospForm.patient_dob} onChange={(e) => setHospForm({ ...hospForm, patient_dob: e.target.value })} data-testid="hosp-patient-dob-input" disabled={!canEdit} /></label>
+                </div>
+                <div className="row-2">
+                  <label>Relationship to primary insured
+                    <select value={hospForm.patient_relationship} onChange={(e) => setHospForm({ ...hospForm, patient_relationship: e.target.value })} data-testid="hosp-patient-relationship-select" disabled={!canEdit}>
+                      <option value="">Not set</option>
+                      {["Self", "Spouse", "Child", "Father", "Mother", "Other"].map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </label>
+                  <label>Occupation
+                    <select value={hospForm.patient_occupation} onChange={(e) => setHospForm({ ...hospForm, patient_occupation: e.target.value })} data-testid="hosp-patient-occupation-select" disabled={!canEdit}>
+                      <option value="">Not set</option>
+                      {["Service", "Self Employed", "Home Maker", "Student", "Retired", "Other"].map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <label>Address<input value={hospForm.patient_address} onChange={(e) => setHospForm({ ...hospForm, patient_address: e.target.value })} placeholder="Patient's address, if different from household" data-testid="hosp-patient-address-input" disabled={!canEdit} /></label>
+                <div className="row-2">
+                  <label>Phone<input value={hospForm.patient_phone} onChange={(e) => setHospForm({ ...hospForm, patient_phone: e.target.value })} data-testid="hosp-patient-phone-input" disabled={!canEdit} /></label>
+                  <label>Email<input type="email" value={hospForm.patient_email} onChange={(e) => setHospForm({ ...hospForm, patient_email: e.target.value })} data-testid="hosp-patient-email-input" disabled={!canEdit} /></label>
+                </div>
+
+                <p className="eyebrow" style={{ marginTop: 10 }}>HOSPITALIZATION SPECIFICS (SECTION D)</p>
+                <div className="row-2">
+                  <label>Room category occupied
+                    <select value={hospForm.room_category} onChange={(e) => setHospForm({ ...hospForm, room_category: e.target.value })} data-testid="hosp-room-category-select" disabled={!canEdit}>
+                      <option value="">Not set</option>
+                      {["Day care", "Single occupancy", "Twin sharing", "3 or more beds per room"].map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </label>
+                  <label>Hospitalization due to
+                    <select value={hospForm.hospitalization_cause} onChange={(e) => setHospForm({ ...hospForm, hospitalization_cause: e.target.value })} data-testid="hosp-cause-select" disabled={!canEdit}>
+                      <option value="">Not set</option><option value="Injury">Injury</option><option value="Illness">Illness</option><option value="Maternity">Maternity</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="row-2">
+                  <label>Date of injury / disease first detected / delivery<input type="date" value={hospForm.date_of_onset} onChange={(e) => setHospForm({ ...hospForm, date_of_onset: e.target.value })} data-testid="hosp-date-of-onset-input" disabled={!canEdit} /></label>
+                  <label>System of medicine<input value={hospForm.system_of_medicine} onChange={(e) => setHospForm({ ...hospForm, system_of_medicine: e.target.value })} placeholder="e.g. Allopathy" data-testid="hosp-system-of-medicine-input" disabled={!canEdit} /></label>
+                </div>
+                <div className="row-2">
+                  <label>Admission time<input type="time" value={hospForm.admission_time} onChange={(e) => setHospForm({ ...hospForm, admission_time: e.target.value })} data-testid="hosp-admission-time-input" disabled={!canEdit} /></label>
+                  <label>Discharge time<input type="time" value={hospForm.discharge_time} onChange={(e) => setHospForm({ ...hospForm, discharge_time: e.target.value })} data-testid="hosp-discharge-time-input" disabled={!canEdit} /></label>
+                </div>
+                {hospForm.hospitalization_cause === "Injury" && (
+                  <>
+                    <label>If injury, cause<input value={hospForm.injury_cause} onChange={(e) => setHospForm({ ...hospForm, injury_cause: e.target.value })} placeholder="e.g. Road traffic accident" data-testid="hosp-injury-cause-input" disabled={!canEdit} /></label>
+                    <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, flexDirection: "row" }}><input type="checkbox" checked={!!hospForm.medico_legal} onChange={(e) => setHospForm({ ...hospForm, medico_legal: e.target.checked })} data-testid="hosp-medico-legal-checkbox" disabled={!canEdit} style={{ width: "auto" }} />Medico-legal case</label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, flexDirection: "row" }}><input type="checkbox" checked={!!hospForm.reported_to_police} onChange={(e) => setHospForm({ ...hospForm, reported_to_police: e.target.checked })} data-testid="hosp-reported-police-checkbox" disabled={!canEdit} style={{ width: "auto" }} />Reported to police</label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, flexDirection: "row" }}><input type="checkbox" checked={!!hospForm.mlc_report_attached} onChange={(e) => setHospForm({ ...hospForm, mlc_report_attached: e.target.checked })} data-testid="hosp-mlc-attached-checkbox" disabled={!canEdit} style={{ width: "auto" }} />MLC report &amp; FIR attached</label>
+                    </div>
+                  </>
+                )}
+
+                <p className="eyebrow" style={{ marginTop: 10 }}>INSURANCE HISTORY (SECTION B)</p>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, flexDirection: "row" }}>
+                  <input type="checkbox" checked={!!hospForm.has_other_insurance} onChange={(e) => setHospForm({ ...hospForm, has_other_insurance: e.target.checked })} data-testid="hosp-other-insurance-checkbox" disabled={!canEdit} style={{ width: "auto" }} />
+                  Currently covered by another Mediclaim / Health Insurance
+                </label>
+                {hospForm.has_other_insurance && (
+                  <div className="row-2">
+                    <label>Other insurer name<input value={hospForm.other_insurer_name} onChange={(e) => setHospForm({ ...hospForm, other_insurer_name: e.target.value })} data-testid="hosp-other-insurer-name-input" disabled={!canEdit} /></label>
+                    <label>Date first insurance began (no break)<input type="date" value={hospForm.first_insurance_start_date} onChange={(e) => setHospForm({ ...hospForm, first_insurance_start_date: e.target.value })} data-testid="hosp-first-insurance-date-input" disabled={!canEdit} /></label>
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, flexDirection: "row" }}><input type="checkbox" checked={!!hospForm.hospitalized_last_4_years} onChange={(e) => setHospForm({ ...hospForm, hospitalized_last_4_years: e.target.checked })} data-testid="hosp-last-4-years-checkbox" disabled={!canEdit} style={{ width: "auto" }} />Hospitalized in the last 4 years</label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, flexDirection: "row" }}><input type="checkbox" checked={!!hospForm.previously_covered_other_insurance} onChange={(e) => setHospForm({ ...hospForm, previously_covered_other_insurance: e.target.checked })} data-testid="hosp-previously-covered-checkbox" disabled={!canEdit} style={{ width: "auto" }} />Previously covered elsewhere</label>
+                </div>
+
+                {canEdit && <button className="primary-button" type="submit" disabled={savingHosp} data-testid="save-hospitalization-button" style={{ justifySelf: "start", marginTop: 8 }}>{savingHosp ? "Saving…" : "Save hospitalization details"}</button>}
               </form>
+              </div>
 
               {claimForm && (
                 <>
-                  {claimForm.coverage_check && (
-                    <div
-                      className={claimForm.coverage_check.matched
-                        ? (claimForm.coverage_check.waiting_status?.covered_now === false || claimForm.coverage_check.covered === false ? "attention-strip" : "ai-insights-panel")
-                        : "empty-hint"}
-                      style={{ marginBottom: 16 }}
-                      data-testid="claimform-coverage-check"
-                    >
-                      {claimForm.coverage_check.matched ? (
-                        <>
-                          <p style={{ margin: 0, fontSize: 12 }}>
-                            <strong>Coverage check — {claimForm.coverage_check.condition}:</strong>{" "}
-                            {claimForm.coverage_check.covered === false ? (
-                              <span className="chip chip-red">Not covered per this policy</span>
-                            ) : claimForm.coverage_check.waiting_status?.covered_now === false ? (
-                              <span className="chip chip-amber">Waiting period active — {claimForm.coverage_check.waiting_status.days_remaining} days left</span>
-                            ) : claimForm.coverage_check.waiting_status?.covered_now === true ? (
-                              <span className="chip chip-teal">Waiting period has passed — covered</span>
-                            ) : (
-                              <span className="chip chip-neutral">Covered, no waiting period stated</span>
-                            )}
-                          </p>
-                          {claimForm.coverage_check.notes && <p style={{ fontSize: 11, color: "var(--muted)", margin: "6px 0 0" }}>{claimForm.coverage_check.notes}</p>}
-                        </>
-                      ) : (
-                        <p style={{ fontSize: 12, margin: 0 }}>{claimForm.coverage_check.message}</p>
-                      )}
+                  <div className="cf-card">
+                    <div className="cf-card-head">
+                      <h3>Bills &amp; documents</h3>
+                      <p>Sorted automatically into pre/during/post-hospitalization using the dates above and each document's bill date.</p>
                     </div>
-                  )}
 
-                  {claimForm.missing_hospitalization_dates && (
-                    <div className="empty-hint" style={{ marginBottom: 16 }} data-testid="claimform-missing-dates-hint">
-                      Add admission and discharge dates above to sort bills into pre/during/post-hospitalization automatically.
+                    {claimForm.coverage_check && (
+                      <div
+                        className={claimForm.coverage_check.matched
+                          ? (claimForm.coverage_check.waiting_status?.covered_now === false || claimForm.coverage_check.covered === false ? "attention-strip" : "ai-insights-panel")
+                          : "empty-hint"}
+                        style={{ marginBottom: 16 }}
+                        data-testid="claimform-coverage-check"
+                      >
+                        {claimForm.coverage_check.matched ? (
+                          <>
+                            <p style={{ margin: 0, fontSize: 12 }}>
+                              <strong>Coverage check — {claimForm.coverage_check.condition}:</strong>{" "}
+                              {claimForm.coverage_check.covered === false ? (
+                                <span className="chip chip-red">Not covered per this policy</span>
+                              ) : claimForm.coverage_check.waiting_status?.covered_now === false ? (
+                                <span className="chip chip-amber">Waiting period active — {claimForm.coverage_check.waiting_status.days_remaining} days left</span>
+                              ) : claimForm.coverage_check.waiting_status?.covered_now === true ? (
+                                <span className="chip chip-teal">Waiting period has passed — covered</span>
+                              ) : (
+                                <span className="chip chip-neutral">Covered, no waiting period stated</span>
+                              )}
+                            </p>
+                            {claimForm.coverage_check.notes && <p style={{ fontSize: 11, color: "var(--muted)", margin: "6px 0 0" }}>{claimForm.coverage_check.notes}</p>}
+                          </>
+                        ) : (
+                          <p style={{ fontSize: 12, margin: 0 }}>{claimForm.coverage_check.message}</p>
+                        )}
+                      </div>
+                    )}
+
+                    {claimForm.missing_hospitalization_dates && (
+                      <div className="cf-notice" data-testid="claimform-missing-dates-hint">
+                        Add admission and discharge dates above to sort bills into pre/during/post-hospitalization automatically.
+                      </div>
+                    )}
+
+                    <div className="card-grid">
+                      {[
+                        { key: "pre_hospitalization", label: "Pre-hospitalization" },
+                        { key: "hospitalization", label: "Hospitalization" },
+                        { key: "post_hospitalization", label: "Post-hospitalization" },
+                      ].map(({ key, label }) => (
+                        <article className="entry" key={key} data-testid={`claimform-bucket-${key}`}>
+                          <strong style={{ fontSize: 12 }}>{label}</strong>
+                          <p style={{ fontSize: 16, margin: "6px 0 0", fontWeight: 700 }}>{inr(claimForm.bills[key].total)}</p>
+                          <small style={{ color: "var(--muted)" }}>{claimForm.bills[key].items.length} document{claimForm.bills[key].items.length === 1 ? "" : "s"}</small>
+                        </article>
+                      ))}
                     </div>
-                  )}
 
-                  <div className="card-grid" style={{ marginBottom: 16 }}>
-                    {[
-                      { key: "pre_hospitalization", label: "Pre-hospitalization" },
-                      { key: "hospitalization", label: "Hospitalization" },
-                      { key: "post_hospitalization", label: "Post-hospitalization" },
-                    ].map(({ key, label }) => (
-                      <article className="entry" key={key} data-testid={`claimform-bucket-${key}`}>
-                        <strong style={{ fontSize: 12 }}>{label}</strong>
-                        <p style={{ fontSize: 16, margin: "6px 0 0", fontWeight: 700 }}>{inr(claimForm.bills[key].total)}</p>
-                        <small style={{ color: "var(--muted)" }}>{claimForm.bills[key].items.length} document{claimForm.bills[key].items.length === 1 ? "" : "s"}</small>
-                      </article>
-                    ))}
+                    <div className="cf-totalbox" data-testid="claimform-grand-total">
+                      <div><span>Total claim expenses</span><strong>{inr(claimForm.grand_total)}</strong></div>
+                    </div>
                   </div>
 
-                  <p style={{ fontSize: 13, fontWeight: 700, marginBottom: 16 }} data-testid="claimform-grand-total">Grand total claimed: {inr(claimForm.grand_total)}</p>
+                  <div className="cf-card">
+                    <div className="cf-card-head">
+                      <h3>Your claim packet</h3>
+                      <p>Everything organized for you to review, print, or hand off yourself - Coversfolio never submits anything on your behalf.</p>
+                    </div>
+                    <div className="cf-package">
+                      <a
+                        href={`${API}/claims/${claimId}/claim-form-pdf`}
+                        target="_blank" rel="noopener noreferrer"
+                        className="cf-packitem" style={{ textDecoration: "none", color: "inherit", display: "block" }}
+                        data-testid="download-claim-form-button"
+                      >
+                        <FileSpreadsheet size={20} />
+                        <b>Claim summary (PDF)</b>
+                        <small>Hospitalization details, bill totals, and coverage check - ready to download.</small>
+                      </a>
+                      <button type="button" className="cf-packitem" style={{ textAlign: "left", background: "#fff", cursor: "pointer", width: "100%" }} onClick={() => setTab("packet")} data-testid="claimform-jump-to-packet">
+                        <Files size={20} />
+                        <b>Document packet</b>
+                        <small>{missingCount > 0 ? `${missingCount} document${missingCount === 1 ? "" : "s"} still missing` : "All checklist documents attached"}</small>
+                      </button>
+                    </div>
+                  </div>
 
-                  <a
-                    href={`${API}/claims/${claimId}/claim-form-pdf`}
-                    target="_blank" rel="noopener noreferrer"
-                    className="primary-button"
-                    style={{ display: "inline-flex", width: "fit-content", textDecoration: "none" }}
-                    data-testid="download-claim-form-button"
-                  >
-                    <FileSpreadsheet size={15} /> Download claim summary (PDF)
-                  </a>
+                  {claimForm.cheat_sheet && (
+                    <div className="cf-card" data-testid="cheat-sheet">
+                      <div className="cf-card-head">
+                        <h3>Fill-in cheat sheet</h3>
+                        <p>Laid out section-by-section to match a standard reimbursement claim form (e.g. Medi Assist / TPA format) - so filling in the paper or PDF form is copying, not hunting through a shoebox of documents.</p>
+                      </div>
+
+                      {claimForm.cheat_sheet.map((section) => (
+                        <div key={section.section} style={{ marginBottom: 18 }} data-testid={`cheat-sheet-section-${section.section}`}>
+                          <p style={{ margin: "0 0 8px" }}><span className="cf-section-badge">Section {section.section}</span><strong style={{ fontSize: 12 }}>{section.title}</strong></p>
+                          {section.fields && (
+                            <div className="cf-cheat-table">
+                              <div className="cf-head">Form field</div><div className="cf-head">Value</div><div className="cf-head">Status</div>
+                              {section.fields.map((f) => {
+                                const filled = f.value !== null && f.value !== undefined && f.value !== "";
+                                return (
+                                  <Fragment key={f.label}>
+                                    <div>{f.label}</div>
+                                    <div style={{ fontWeight: filled ? 600 : 400 }}>{filled ? String(f.value) : "—"}</div>
+                                    <div className={filled ? "cf-filled" : "cf-missing"}>{filled ? "Filled in" : "Needs input"}</div>
+                                  </Fragment>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {section.bills && (
+                            section.bills.length === 0 ? (
+                              <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>No bills with an amount logged yet - add bill amounts when uploading documents in the Documents page.</p>
+                            ) : (
+                              <table style={{ width: "100%", marginTop: 8, fontSize: 11, borderCollapse: "collapse" }}>
+                                <thead><tr style={{ textAlign: "left", color: "var(--muted)" }}><th style={{ paddingBottom: 4 }}>Sl.</th><th>Document</th><th>Towards</th><th>Bill date</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
+                                <tbody>
+                                  {section.bills.map((b, i) => (
+                                    <tr key={i} style={{ borderTop: "1px dashed var(--line)" }}>
+                                      <td style={{ padding: "4px 0" }}>{i + 1}</td>
+                                      <td>{b.filename}</td>
+                                      <td>{b.towards}</td>
+                                      <td>{b.bill_date || "—"}</td>
+                                      <td style={{ textAlign: "right" }}>{inr(b.amount)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )
+                          )}
+                          {section.note && <p style={{ fontSize: 10, color: "var(--muted)", marginTop: 8, fontStyle: "italic" }}>{section.note}</p>}
+                        </div>
+                      ))}
+
+                      <div>
+                        <p style={{ margin: "0 0 8px" }}><span className="cf-section-badge">Section G</span><strong style={{ fontSize: 12 }}>Details of primary insured's bank account</strong></p>
+                        <div className="cf-notice" style={{ marginBottom: 12 }}>
+                          Typed here only to lay it out for you to copy - this stays in your browser for this session only. Coversfolio never saves or transmits your bank/PAN details.
+                        </div>
+                        <div className="row-2">
+                          <label style={{ fontSize: 11 }}>TPA / Company membership ID<input value={bankForm.tpa_membership_id} onChange={(e) => setBankForm({ ...bankForm, tpa_membership_id: e.target.value })} data-testid="bank-tpa-id-input" /></label>
+                          <label style={{ fontSize: 11 }}>PAN<input value={bankForm.pan_number} onChange={(e) => setBankForm({ ...bankForm, pan_number: e.target.value.toUpperCase() })} maxLength={10} data-testid="bank-pan-input" /></label>
+                        </div>
+                        <div className="row-2">
+                          <label style={{ fontSize: 11 }}>Account holder name<input value={bankForm.bank_account_holder} onChange={(e) => setBankForm({ ...bankForm, bank_account_holder: e.target.value })} data-testid="bank-holder-input" /></label>
+                          <label style={{ fontSize: 11 }}>Account number<input value={bankForm.bank_account_number} onChange={(e) => setBankForm({ ...bankForm, bank_account_number: e.target.value })} data-testid="bank-account-number-input" /></label>
+                        </div>
+                        <div className="row-2">
+                          <label style={{ fontSize: 11 }}>Bank name and branch<input value={bankForm.bank_name_branch} onChange={(e) => setBankForm({ ...bankForm, bank_name_branch: e.target.value })} data-testid="bank-name-branch-input" /></label>
+                          <label style={{ fontSize: 11 }}>IFSC code<input value={bankForm.ifsc_code} onChange={(e) => setBankForm({ ...bankForm, ifsc_code: e.target.value.toUpperCase() })} maxLength={11} data-testid="bank-ifsc-input" /></label>
+                        </div>
+                        <label style={{ fontSize: 11 }}>Cheque / DD payable to<input value={bankForm.cheque_payable_name} onChange={(e) => setBankForm({ ...bankForm, cheque_payable_name: e.target.value })} data-testid="bank-cheque-payable-input" /></label>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </section>

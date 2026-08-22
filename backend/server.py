@@ -233,6 +233,35 @@ class HospitalizationDetails(BaseModel):
     diagnosis: str | None = Field(default=None, max_length=300)
     is_maternity: bool | None = None
 
+    # Section B on the standard reimbursement claim form - insurance history.
+    has_other_insurance: bool | None = None
+    other_insurer_name: str | None = Field(default=None, max_length=120)
+    first_insurance_start_date: str | None = Field(default=None, max_length=20)
+    hospitalized_last_4_years: bool | None = None
+    previously_covered_other_insurance: bool | None = None
+
+    # Section C - details of the insured person hospitalized, beyond the name
+    # already captured above.
+    patient_gender: str | None = Field(default=None, pattern="^(Male|Female)$")
+    patient_dob: str | None = Field(default=None, max_length=20)
+    patient_relationship: str | None = Field(default=None, max_length=40)
+    patient_occupation: str | None = Field(default=None, max_length=60)
+    patient_address: str | None = Field(default=None, max_length=300)
+    patient_phone: str | None = Field(default=None, max_length=20)
+    patient_email: str | None = Field(default=None, max_length=120)
+
+    # Section D - hospitalization specifics beyond hospital name and dates.
+    room_category: str | None = Field(default=None, max_length=60)
+    hospitalization_cause: str | None = Field(default=None, pattern="^(Injury|Illness|Maternity)$")
+    date_of_onset: str | None = Field(default=None, max_length=20)
+    admission_time: str | None = Field(default=None, max_length=10)
+    discharge_time: str | None = Field(default=None, max_length=10)
+    medico_legal: bool | None = None
+    injury_cause: str | None = Field(default=None, max_length=60)
+    reported_to_police: bool | None = None
+    mlc_report_attached: bool | None = None
+    system_of_medicine: str | None = Field(default=None, max_length=40)
+
 
 class InviteCreate(BaseModel):
     email: EmailStr
@@ -1955,6 +1984,86 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
     if policy and claim.get("diagnosis"):
         coverage_check = check_condition_against_policy(policy, claim["diagnosis"])
 
+    def yn(v):
+        if v is True:
+            return "Yes"
+        if v is False:
+            return "No"
+        return None
+
+    # A bill-by-bill list for Section F ("Details of bills enclosed"). Bill
+    # number and issuer aren't captured when a document is uploaded (they're
+    # read off the physical bill itself), so those two columns are left for
+    # the person to fill in by hand from what's in front of them - everything
+    # else is already known.
+    bill_rows = [
+        {"filename": item["filename"], "towards": item["category"], "bill_date": item["bill_date"], "amount": item["amount"]}
+        for bucket in ("pre_hospitalization", "hospitalization", "post_hospitalization", "unknown")
+        for item in buckets[bucket]
+    ]
+
+    cheat_sheet = [
+        {
+            "section": "A", "title": "Details of primary insured",
+            "fields": [
+                {"label": "Policy No.", "value": policy.get("policy_number") if policy else None},
+                {"label": "Name", "value": household["name"]},
+            ],
+        },
+        {
+            "section": "B", "title": "Details of insurance history",
+            "fields": [
+                {"label": "Currently covered by another Mediclaim / Health Insurance?", "value": yn(claim.get("has_other_insurance"))},
+                {"label": "Date of commencement of first insurance without break", "value": claim.get("first_insurance_start_date")},
+                {"label": "If yes, company name", "value": claim.get("other_insurer_name")},
+                {"label": "Hospitalized in the last 4 years since inception of the contract?", "value": yn(claim.get("hospitalized_last_4_years"))},
+                {"label": "Previously covered by another Mediclaim / Health insurance?", "value": yn(claim.get("previously_covered_other_insurance"))},
+            ],
+        },
+        {
+            "section": "C", "title": "Details of insured person hospitalized",
+            "fields": [
+                {"label": "Name", "value": claim.get("patient_name")},
+                {"label": "Gender", "value": claim.get("patient_gender")},
+                {"label": "Date of birth", "value": claim.get("patient_dob")},
+                {"label": "Relationship to primary insured", "value": claim.get("patient_relationship")},
+                {"label": "Occupation", "value": claim.get("patient_occupation")},
+                {"label": "Address", "value": claim.get("patient_address")},
+                {"label": "Phone", "value": claim.get("patient_phone")},
+                {"label": "Email", "value": claim.get("patient_email")},
+            ],
+        },
+        {
+            "section": "D", "title": "Details of hospitalization",
+            "fields": [
+                {"label": "Name of hospital where admitted", "value": claim.get("hospital_name")},
+                {"label": "Room category occupied", "value": claim.get("room_category")},
+                {"label": "Hospitalization due to", "value": claim.get("hospitalization_cause") or ("Maternity" if claim.get("is_maternity") else None)},
+                {"label": "Date of injury / disease first detected / delivery", "value": claim.get("date_of_onset")},
+                {"label": "Date of admission", "value": admission_date},
+                {"label": "Time", "value": claim.get("admission_time")},
+                {"label": "Date of discharge", "value": discharge_date},
+                {"label": "Time", "value": claim.get("discharge_time")},
+                {"label": "If medico-legal", "value": yn(claim.get("medico_legal"))},
+                {"label": "If injury, give cause", "value": claim.get("injury_cause")},
+                {"label": "Reported to police", "value": yn(claim.get("reported_to_police"))},
+                {"label": "MLC report & Police FIR attached", "value": yn(claim.get("mlc_report_attached"))},
+                {"label": "System of medicine", "value": claim.get("system_of_medicine")},
+            ],
+        },
+        {
+            "section": "E", "title": "Details of claim - treatment expenses",
+            "fields": [
+                {"label": "Pre-hospitalization expenses (Rs.)", "value": totals["pre_hospitalization"]},
+                {"label": "Hospitalization expenses (Rs.)", "value": totals["hospitalization"]},
+                {"label": "Post-hospitalization expenses (Rs.)", "value": totals["post_hospitalization"]},
+                {"label": "Total (Rs.)", "value": grand_total},
+            ],
+            "note": "Ambulance charges, health-checkup cost, domiciliary hospitalization, and lump-sum/cash benefits aren't calculated automatically - add those on the paper form only if they apply to your claim.",
+        },
+        {"section": "F", "title": "Details of bills enclosed", "bills": bill_rows},
+    ]
+
     return {
         "household_name": household["name"],
         "policy": {
@@ -1978,6 +2087,7 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
         "document_checklist": packet["sections"],
         "missing_hospitalization_dates": not admission_date or not discharge_date,
         "coverage_check": coverage_check,
+        "cheat_sheet": cheat_sheet,
     }
 
 

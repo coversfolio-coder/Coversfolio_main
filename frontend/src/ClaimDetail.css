@@ -58,4 +58,36 @@
 .outline-button.danger{border-color:var(--red);color:var(--red)}
 .outline-button.danger:hover{background:#fdf1f1}
 .empty-claim{background:#f7fafb;border-style:dashed}
+
+/* Claim Panel (Filing Assistant) - restyled to a clearer, more guided layout:
+   step tracker, card sections, a real cheat-sheet table, and a dark total box -
+   built from the app's own theme tokens rather than a one-off palette. */
+.cf-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px}
+.cf-step{padding:13px 14px;border-radius:11px;background:#f6f9fb;border:1px solid var(--line)}
+.cf-step strong{display:block;font:600 12px 'Plus Jakarta Sans';color:var(--ink)}
+.cf-step span{display:block;font-size:10px;color:var(--muted);margin-top:3px}
+.cf-step.done{background:#e8f6f3;border-color:#c7e8de}
+.cf-step.done span{color:var(--teal);font-weight:700}
+.cf-step.active{background:#eef1ff;border-color:#d3d9fb}
+.cf-step.active span{color:#5850c9;font-weight:700}
+.cf-card{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin-bottom:18px;box-shadow:0 8px 22px #0b1f3f08}
+.cf-card-head{margin-bottom:14px}
+.cf-card-head h3{font:600 15px Outfit;margin:0 0 4px}
+.cf-card-head p{font-size:11px;color:var(--muted);margin:0;line-height:1.5}
+.cf-notice{border-left:3px solid var(--gold);background:#fdf6e8;padding:11px 14px;border-radius:7px;color:#7a5a12;font-size:11px;line-height:1.5;margin-bottom:16px}
+.cf-section-badge{display:inline-block;background:var(--navy);color:#fff;font:700 9px 'Plus Jakarta Sans';padding:3px 8px;border-radius:11px;letter-spacing:.04em;margin-right:8px}
+.cf-totalbox{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-radius:12px;background:var(--navy);color:#fff;margin-top:16px}
+.cf-totalbox span{color:#9fb3d6;font-size:10px;text-transform:uppercase;letter-spacing:.06em;display:block}
+.cf-totalbox strong{font:700 23px Outfit}
+.cf-cheat-table{display:grid;grid-template-columns:1.3fr 1fr .8fr;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.cf-cheat-table>div{padding:10px 12px;border-bottom:1px solid var(--line);font-size:11px;display:flex;align-items:center}
+.cf-cheat-table .cf-head{background:#f6f9fb;font:700 9px 'Plus Jakarta Sans';color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.cf-cheat-table .cf-filled{color:var(--teal);font-weight:700}
+.cf-cheat-table .cf-missing{color:var(--muted)}
+.cf-package{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:6px}
+.cf-packitem{border:1px solid var(--line);border-radius:12px;padding:15px}
+.cf-packitem svg{color:var(--navy);margin-bottom:8px}
+.cf-packitem b{display:block;font-size:12px;margin-bottom:4px}
+.cf-packitem small{color:var(--muted);font-size:10px;line-height:1.4}
+@media(max-width:680px){.cf-steps{grid-template-columns:1fr}.cf-cheat-table{grid-template-columns:1fr 1fr}}
 @media(max-width:680px){.drawer{padding:28px 22px 60px}.detail-meta{grid-template-columns:1fr 1fr}.row-2{grid-template-columns:1fr}}
