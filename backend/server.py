@@ -2339,6 +2339,23 @@ async def create_claim(input: ClaimCreate, user: dict = Depends(current_user)):
     return _public_claim(claim)
 
 
+@api_router.delete("/claims/{claim_id}")
+async def delete_claim(claim_id: str, user: dict = Depends(current_user)):
+    _require_writer(user)
+    result = await db.claims.delete_one({"id": claim_id, "household_id": user["household_id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    # Documents attached to this claim belong to the household, not the claim -
+    # unlink rather than delete them, so removing an incomplete/test claim never
+    # silently destroys a real bill or discharge summary someone uploaded.
+    await db.documents.update_many(
+        {"household_id": user["household_id"], "linked_claim_id": claim_id},
+        {"$set": {"linked_claim_id": None}},
+    )
+    await audit(user, "claim_removed", f"Removed claim {claim_id}")
+    return {"ok": True}
+
+
 def _public_claim(claim: dict) -> dict:
     return {k: v for k, v in claim.items() if k not in ("_id", "household_id", "created_by", "created_at")}
 

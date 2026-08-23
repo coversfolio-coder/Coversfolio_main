@@ -3,7 +3,7 @@ import client, { apiError } from "@/api";
 import {
   Bell, BookOpen, Check, CheckCircle2, ChevronRight, ClipboardCheck,
   FileText, Home, LayoutDashboard, LifeBuoy, LogOut, Menu, Plus, Search, Settings, ShieldCheck,
-  Stethoscope, Upload, User as UserIcon, Users, X, UserPlus, UserX, History
+  Stethoscope, Trash2, Upload, User as UserIcon, Users, X, UserPlus, UserX, History
 } from "lucide-react";
 import "@/App.css";
 import "@/Auth.css";
@@ -194,6 +194,14 @@ function App() {
   }, []);
 
   const refreshDashboard = () => { if (user) client.get(`/dashboard`).then(r => setData(r.data)).catch(() => {}); };
+  const deleteClaim = async (claim) => {
+    if (!window.confirm(`Remove "${claim.title}"? This can't be undone - any documents attached to it stay in your Documents vault, just unlinked from this claim.`)) return;
+    try {
+      await client.delete(`/claims/${claim.id}`);
+      notify("Claim removed");
+      refreshDashboard();
+    } catch (err) { notify(apiError(err)); }
+  };
   const signOut = async () => { try { await client.post(`/auth/logout`, {}); } catch (err) {} setUser(false); setData(fallback); setOpenClaimId(null); setShowMembers(false); };
   useEffect(() => {
     client.get(`/auth/me`).then(r => setUser(r.data)).catch(() => setUser(false)).finally(() => setAuthChecking(false));
@@ -310,7 +318,14 @@ function App() {
                       <td><span className={`chip chip-${ready ? "teal" : "amber"}`}>{claim.packet_status || "Not started"}</span></td>
                       <td className="mono">{claim.documents_attached ?? 0}/{claim.documents_total ?? 0} attached</td>
                       <td className="mono">{claim.created_at ? claim.created_at.slice(0, 10) : "—"}</td>
-                      <td><button className="packet-action" data-testid={`open-claim-${claim.id}`} onClick={() => openClaim(claim.id)}>{ready ? "Download packet" : "Continue"}</button></td>
+                      <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <button className="packet-action" data-testid={`open-claim-${claim.id}`} onClick={() => openClaim(claim.id)}>{ready ? "Download packet" : "Continue"}</button>
+                        {canEdit && (
+                          <button className="icon-button" aria-label="Remove claim" data-testid={`remove-claim-${claim.id}`} onClick={() => deleteClaim(claim)}>
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}

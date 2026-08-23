@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import client, { API, apiError } from "@/api";
 import {
   X, FileText, MessageSquare, IndianRupee, AlertTriangle,
-  Undo2, Check, Plus, ClipboardList, ShieldAlert, CheckCircle2, Files, Link2, FileSpreadsheet
+  Undo2, Check, Plus, ClipboardList, ShieldAlert, CheckCircle2, Files, Link2, FileSpreadsheet, Trash2
 } from "lucide-react";
 
 
@@ -115,6 +115,15 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   };
   const changeStatus = (status) => {
     call(async () => { await client.post(`/claims/${claimId}/status`, { status, reason }); setReason(""); }, `Marked ${status}`);
+  };
+  const deleteClaim = async () => {
+    if (!window.confirm(`Remove "${claim.title}"? This can't be undone - any documents attached to it stay in your Documents vault, just unlinked from this claim.`)) return;
+    try {
+      await client.delete(`/claims/${claimId}`);
+      notify("Claim removed");
+      onChange && onChange();
+      onClose();
+    } catch (err) { notify(apiError(err)); }
   };
 
   if (!claim) return (
@@ -578,6 +587,10 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                     <button className="primary-button" onClick={() => changeStatus("settled")} data-testid="mark-settled-button"><Check size={14} /> Mark settled</button>
                   </div>
                   <p className="readonly-hint">Note: this app prepares and tracks your file — insurer decisions and TPA confirmations remain authoritative.</p>
+                  <div style={{ borderTop: "1px solid var(--line)", marginTop: 18, paddingTop: 16 }}>
+                    <p style={{ fontSize: 11, color: "var(--muted)", margin: "0 0 10px" }}>Started this by mistake, or just testing? You can remove it entirely instead of changing its status.</p>
+                    <button className="outline-button danger" onClick={deleteClaim} data-testid="delete-claim-button"><Trash2 size={14} /> Delete this claim</button>
+                  </div>
                 </div>
               ) : <p className="readonly-hint">Only owners and household members can change the claim outcome.</p>}
             </section>
