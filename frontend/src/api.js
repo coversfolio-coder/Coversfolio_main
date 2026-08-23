@@ -30,6 +30,8 @@ export function apiError(error) {
   const detail = error?.response?.data?.detail;
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) return detail.map((item) => item?.msg || "Please check your details").join(" ");
+  if (error?.code === "ECONNABORTED") return "That took too long, possibly a slow connection - try again, ideally on Wi-Fi or a stronger signal.";
+  if (!error?.response) return "Couldn't reach the server - check your connection and try again.";
   return "Something went wrong. Please try again.";
 }
 

@@ -71,7 +71,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
       // load, so switching tabs manually afterward (e.g. after saving hospitalization
       // details triggers a refresh) doesn't keep yanking the person back.
       setTab((prev) => prev || "claimform");
-    } catch (err) { notify(apiError(err)); onClose(); }
+    } catch (err) { notify(apiError(err), true); onClose(); }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [claimId]);
@@ -80,7 +80,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
 
   const call = async (fn, ok) => {
     try { await fn(); notify(ok); await refresh(); }
-    catch (err) { notify(apiError(err)); }
+    catch (err) { notify(apiError(err), true); }
   };
 
   const attachDocument = (docId) => call(async () => { await client.post(`/documents/${docId}/link`, { linked_claim_id: claimId }); }, "Document attached");
@@ -92,7 +92,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
       await client.put(`/claims/${claimId}/hospitalization`, hospForm);
       notify("Hospitalization details saved");
       await refresh();
-    } catch (err) { notify(apiError(err)); } finally { setSavingHosp(false); }
+    } catch (err) { notify(apiError(err), true); } finally { setSavingHosp(false); }
   };
 
   const submitNote = (e) => {
@@ -121,7 +121,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
       notify("Claim removed");
       onChange && onChange();
       onClose();
-    } catch (err) { notify(apiError(err)); }
+    } catch (err) { notify(apiError(err), true); }
   };
 
   if (!claim) return (

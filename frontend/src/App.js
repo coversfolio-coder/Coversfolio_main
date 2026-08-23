@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import client, { apiError } from "@/api";
 import {
-  Bell, BookOpen, Check, CheckCircle2, ChevronRight, ClipboardCheck,
+  AlertTriangle, Bell, BookOpen, Check, CheckCircle2, ChevronRight, ClipboardCheck,
   FileText, Home, LayoutDashboard, LifeBuoy, LogOut, Menu, Plus, Search, Settings, ShieldCheck,
   Stethoscope, Trash2, Upload, User as UserIcon, Users, X, UserPlus, UserX, History
 } from "lucide-react";
@@ -293,7 +293,7 @@ function App() {
   const [policyPrefill, setPolicyPrefill] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [newClaimPolicyId, setNewClaimPolicyId] = useState("");
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState(null); // { message, isError } | null
   const [showMembers, setShowMembers] = useState(false);
   const [members, setMembers] = useState({ members: [], invites: [] });
   const [activity, setActivity] = useState([]);
@@ -343,18 +343,18 @@ function App() {
       await client.delete(`/claims/${claim.id}`);
       notify("Claim removed");
       refreshDashboard();
-    } catch (err) { notify(apiError(err)); }
+    } catch (err) { notify(apiError(err), true); }
   };
   const signOut = async () => { try { await client.post(`/auth/logout`, {}); } catch (err) {} setUser(false); setData(fallback); setOpenClaimId(null); setShowMembers(false); };
   useEffect(() => {
     client.get(`/auth/me`).then(r => setUser(r.data)).catch(() => setUser(false)).finally(() => setAuthChecking(false));
   }, []);
   useEffect(() => { if (user && active === "workspace") client.get(`/dashboard`).then(r => setData(r.data)).catch(() => {}); }, [user, active]);
-  const notify = (message) => { setToast(message); window.setTimeout(() => setToast(""), 2800); };
-  const openMembers = async () => { setShowMembers(true); try { const [people, history] = await Promise.all([client.get(`/household/members`), client.get(`/household/activity`)]); setMembers(people.data); setActivity(history.data.events); } catch (err) { notify(apiError(err)); } };
-  const inviteMember = async (event) => { event.preventDefault(); try { const response = await client.post(`/household/invites`, inviteForm); setMembers({ ...members, invites: [response.data, ...members.invites] }); setInviteForm({ email: "", role: "member" }); notify("Invitation link ready to share"); } catch (err) { notify(apiError(err)); } };
-  const revokeMember = async (id) => { try { await client.delete(`/household/members/${id}`); setMembers({ ...members, members: members.members.map(item => item.id === id ? { ...item, status: "revoked" } : item) }); notify("Access revoked"); } catch (err) { notify(apiError(err)); } };
-  const revokeInvite = async (id) => { try { await client.delete(`/household/invites/${id}`); setMembers({ ...members, invites: members.invites.filter(item => item.id !== id) }); notify("Invitation revoked"); } catch (err) { notify(apiError(err)); } };
+  const notify = (message, isError = false) => { setToast({ message, isError }); window.setTimeout(() => setToast(null), 2800); };
+  const openMembers = async () => { setShowMembers(true); try { const [people, history] = await Promise.all([client.get(`/household/members`), client.get(`/household/activity`)]); setMembers(people.data); setActivity(history.data.events); } catch (err) { notify(apiError(err), true); } };
+  const inviteMember = async (event) => { event.preventDefault(); try { const response = await client.post(`/household/invites`, inviteForm); setMembers({ ...members, invites: [response.data, ...members.invites] }); setInviteForm({ email: "", role: "member" }); notify("Invitation link ready to share"); } catch (err) { notify(apiError(err), true); } };
+  const revokeMember = async (id) => { try { await client.delete(`/household/members/${id}`); setMembers({ ...members, members: members.members.map(item => item.id === id ? { ...item, status: "revoked" } : item) }); notify("Access revoked"); } catch (err) { notify(apiError(err), true); } };
+  const revokeInvite = async (id) => { try { await client.delete(`/household/invites/${id}`); setMembers({ ...members, invites: members.invites.filter(item => item.id !== id) }); notify("Invitation revoked"); } catch (err) { notify(apiError(err), true); } };
 
   if (authChecking) return <div className="auth-loading" data-testid="auth-loading"><ShieldCheck size={24} />Loading your secure workspace…</div>;
   if (!user) return <AuthScreen onAuthenticated={setUser} />;
@@ -382,7 +382,7 @@ function App() {
           <section className="onboarding-card" data-testid="onboarding-checklist">
             <div className="onboarding-header">
               <div><p className="eyebrow">GETTING STARTED</p><h2>A few things to set up</h2></div>
-              <button className="text-button" data-testid="dismiss-onboarding-button" onClick={async () => { try { await client.post("/household/onboarding/dismiss"); refreshDashboard(); } catch (err) { notify(apiError(err)); } }}>Dismiss</button>
+              <button className="text-button" data-testid="dismiss-onboarding-button" onClick={async () => { try { await client.post("/household/onboarding/dismiss"); refreshDashboard(); } catch (err) { notify(apiError(err), true); } }}>Dismiss</button>
             </div>
             <div className="onboarding-steps">
               {data.onboarding.steps.map((step, i) => (
@@ -483,8 +483,13 @@ function App() {
       </div>
     </main>
     {showMembers && <div className="modal-backdrop" data-testid="members-modal"><div className="modal members-modal"><button className="close-button" aria-label="Close household access" data-testid="close-members-modal-button" onClick={() => setShowMembers(false)}><X size={18} /></button><p className="eyebrow">HOUSEHOLD ACCESS</p><h2>People in your household</h2><p className="modal-copy">Invite people to help prepare the file. Agents can view but cannot change claims.</p><form className="invite-form" onSubmit={inviteMember} data-testid="invite-member-form"><input required type="email" placeholder="person@example.com" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} data-testid="invite-email-input" /><select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} data-testid="invite-role-select"><option value="member">Household member</option><option value="agent">Read-only agent</option></select><button className="primary-button" data-testid="send-invite-button"><UserPlus size={16} /> Invite</button></form><div className="member-list" data-testid="member-list">{members.members.map(item => <div className={`member-row ${item.status === "revoked" ? "revoked" : ""}`} key={item.id} data-testid={`member-row-${item.id}`}><span className="avatar avatar-small">{item.name.slice(0, 2).toUpperCase()}</span><span><strong>{item.name}</strong><small>{item.email} · {item.role === "agent" ? "Read-only agent" : item.role === "owner" ? "Owner" : "Household member"}</small></span>{item.role !== "owner" && item.status !== "revoked" && <button className="member-action" aria-label={`Revoke ${item.name}`} data-testid={`revoke-member-${item.id}`} onClick={() => revokeMember(item.id)}><UserX size={15} /></button>}{item.status === "revoked" && <em>Revoked</em>}</div>)}{members.invites.map(item => <div className="member-row pending" key={item.id} data-testid={`invite-row-${item.id}`}><span className="avatar avatar-small">?</span><span><strong>{item.email}</strong><small>Pending · {item.role === "agent" ? "Read-only agent" : "Household member"}</small></span><button className="member-action" aria-label="Revoke invitation" data-testid={`revoke-invite-${item.id}`} onClick={() => revokeInvite(item.id)}><X size={15} /></button></div>)}</div><div className="activity-header"><span><History size={15} /> Recent access activity</span><small>{activity.length} events</small></div><div className="activity-list" data-testid="activity-list">{activity.slice(0, 5).map(event => <div className="activity-row" key={event.id}><span className="activity-dot" /><span><strong>{event.actor_name}</strong> {event.detail}<small>{new Date(event.created_at).toLocaleString()}</small></span></div>)}</div></div></div>}
-    {showNew && <div className="modal-backdrop" data-testid="new-claim-modal"><div className="modal"><button className="close-button" aria-label="Close" data-testid="close-new-claim-button" onClick={() => { setShowNew(false); setNewClaimPolicyId(""); }}><X size={18} /></button><p className="eyebrow">START A CLAIM</p><h2>What happened?</h2><p className="modal-copy">Choose a claim type to begin building your file.</p>{data.policies?.length > 0 && <label style={{ display: "block", marginBottom: 16, fontSize: 11, fontWeight: 600 }}>Which policy is this for? (optional)<select value={newClaimPolicyId} onChange={(e) => setNewClaimPolicyId(e.target.value)} data-testid="new-claim-policy-select" style={{ display: "block", width: "100%", marginTop: 6, padding: 10, borderRadius: 6, border: "1px solid var(--line)", fontSize: 12 }}><option value="">Not sure yet</option>{data.policies.map((p) => <option key={p.id} value={p.id}>{p.insurer_name} · {p.policy_type}</option>)}</select></label>}<div className="claim-options"><button data-testid="cashless-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New hospitalisation claim", claim_type: "Cashless", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Cashless claim saved"); } catch (err) { notify(apiError(err)); } }}><Stethoscope size={20} /><strong>Cashless hospitalisation</strong><small>For planned or emergency care</small></button><button data-testid="reimbursement-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New reimbursement claim", claim_type: "Reimbursement", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Reimbursement claim saved"); } catch (err) { notify(apiError(err)); } }}><ClipboardCheck size={20} /><strong>Reimbursement</strong><small>For expenses already paid</small></button></div></div></div>}
-    {toast && <div className="toast" role="status" data-testid="toast-message"><Check size={16} />{toast}</div>}
+    {showNew && <div className="modal-backdrop" data-testid="new-claim-modal"><div className="modal"><button className="close-button" aria-label="Close" data-testid="close-new-claim-button" onClick={() => { setShowNew(false); setNewClaimPolicyId(""); }}><X size={18} /></button><p className="eyebrow">START A CLAIM</p><h2>What happened?</h2><p className="modal-copy">Choose a claim type to begin building your file.</p>{data.policies?.length > 0 && <label style={{ display: "block", marginBottom: 16, fontSize: 11, fontWeight: 600 }}>Which policy is this for? (optional)<select value={newClaimPolicyId} onChange={(e) => setNewClaimPolicyId(e.target.value)} data-testid="new-claim-policy-select" style={{ display: "block", width: "100%", marginTop: 6, padding: 10, borderRadius: 6, border: "1px solid var(--line)", fontSize: 12 }}><option value="">Not sure yet</option>{data.policies.map((p) => <option key={p.id} value={p.id}>{p.insurer_name} · {p.policy_type}</option>)}</select></label>}<div className="claim-options"><button data-testid="cashless-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New hospitalisation claim", claim_type: "Cashless", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Cashless claim saved"); } catch (err) { notify(apiError(err), true); } }}><Stethoscope size={20} /><strong>Cashless hospitalisation</strong><small>For planned or emergency care</small></button><button data-testid="reimbursement-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New reimbursement claim", claim_type: "Reimbursement", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Reimbursement claim saved"); } catch (err) { notify(apiError(err), true); } }}><ClipboardCheck size={20} /><strong>Reimbursement</strong><small>For expenses already paid</small></button></div></div></div>}
+    {toast && (
+      <div className={toast.isError ? "toast toast-error" : "toast"} role="status" data-testid="toast-message">
+        {toast.isError ? <AlertTriangle size={16} /> : <Check size={16} />}
+        {toast.message}
+      </div>
+    )}
     {openClaimId && <ClaimDetail claimId={openClaimId} canEdit={canEdit} onClose={() => window.history.back()} onChange={refreshDashboard} notify={notify} />}
   </div>;
 }

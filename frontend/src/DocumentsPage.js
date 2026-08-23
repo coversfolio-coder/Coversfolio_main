@@ -44,7 +44,7 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
   const inputRef = useRef(null);
 
   const load = () => {
-    client.get("/documents").then((r) => setDocuments(r.data.documents)).catch((err) => notify(apiError(err)));
+    client.get("/documents").then((r) => setDocuments(r.data.documents)).catch((err) => notify(apiError(err), true));
     client.get("/policies").then((r) => setPolicies(r.data.policies)).catch(() => setPolicies([]));
     client.get("/dashboard").then((r) => setClaims(r.data.claims || [])).catch(() => setClaims([]));
   };
@@ -76,7 +76,7 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
       if (uploadClaimId) formData.append("linked_claim_id", uploadClaimId);
       if (billAmount) formData.append("bill_amount", billAmount);
       if (billDate) formData.append("bill_date", billDate);
-      const res = await client.post("/documents", formData, { headers: { "Content-Type": "multipart/form-data" } });
+      const res = await client.post("/documents", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
       const detected = res.data.detected_policy;
       if (detected?.matched_existing) {
         notify(`Uploaded and linked to your existing ${detected.insurer_name} policy`);
@@ -89,7 +89,7 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
       setShowUploadModal(false);
       setPendingFile(null);
       load();
-    } catch (err) { notify(apiError(err)); } finally { setUploading(false); }
+    } catch (err) { notify(apiError(err), true); } finally { setUploading(false); }
   };
 
   const download = (doc) => {
@@ -100,7 +100,7 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
 
   const remove = async (id) => {
     try { await client.delete(`/documents/${id}`); notify("Document removed"); load(); }
-    catch (err) { notify(apiError(err)); }
+    catch (err) { notify(apiError(err), true); }
   };
 
   if (documents === null || policies === null) return <div className="page-loading" data-testid="documents-loading">Loading your documents…</div>;

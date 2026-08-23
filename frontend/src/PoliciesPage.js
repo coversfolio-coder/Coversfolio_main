@@ -40,7 +40,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       setDetailsPolicy(res.data);
       notify("Logged - noted today as when you used it");
       load();
-    } catch (err) { notify(apiError(err)); } finally { setLoggingCheckup(false); }
+    } catch (err) { notify(apiError(err), true); } finally { setLoggingCheckup(false); }
   };
   const [conditionQuery, setConditionQuery] = useState("");
   const [conditionResult, setConditionResult] = useState(null);
@@ -56,14 +56,14 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const analyzeRes = await client.post("/policies/extract-ai", formData, { headers: { "Content-Type": "multipart/form-data" } });
+      const analyzeRes = await client.post("/policies/extract-ai", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
       const { source, ...insights } = analyzeRes.data;
       await client.put(`/policies/${policyId}`, { ai_insights: insights });
       notify("AI analysis added to this policy");
       load();
     } catch (err) {
-      if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet");
-      else notify(apiError(err));
+      if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet", true);
+      else notify(apiError(err), true);
     } finally { setRetroAnalyzing(null); }
   };
 
@@ -76,7 +76,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
           const res = await client.get("/geocode/reverse", { params: { lat: position.coords.latitude, lng: position.coords.longitude } });
           setHospitalCity(res.data.city);
           notify(`Detected: ${res.data.city}`);
-        } catch (err) { notify(apiError(err)); } finally { setLocating(false); }
+        } catch (err) { notify(apiError(err), true); } finally { setLocating(false); }
       },
       () => { notify("Couldn't access your location - please type your city instead"); setLocating(false); },
       { timeout: 10000 }
@@ -97,7 +97,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
     // Keep an already-open details modal showing fresh data (e.g. right after
     // an "Analyze with AI" pass completes) instead of stale pre-analysis info.
     setDetailsPolicy((prev) => (prev ? r.data.policies.find((p) => p.id === prev.id) || prev : prev));
-  }).catch((err) => notify(apiError(err)));
+  }).catch((err) => notify(apiError(err), true));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
 
@@ -173,13 +173,13 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await client.post("/policies/extract", formData, { headers: { "Content-Type": "multipart/form-data" } });
+      const res = await client.post("/policies/extract", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
       const detected = res.data;
       applyScanFields(detected);
       const foundCount = ["insurer_name", "policy_number", "policy_type", "sum_insured", "start_date", "end_date"].filter((k) => detected[k]).length + (detected.insured_people?.length > 0 ? 1 : 0);
       setScannedFrom(file.name);
       notify(foundCount > 0 ? `Found ${foundCount} detail${foundCount === 1 ? "" : "s"} in ${file.name}` : `Couldn't detect policy details in ${file.name} - please fill them in manually`);
-    } catch (err) { notify(apiError(err)); } finally { setScanning(false); }
+    } catch (err) { notify(apiError(err), true); } finally { setScanning(false); }
   };
 
   const onAIFilePicked = async (e) => {
@@ -192,13 +192,13 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await client.post("/policies/extract-ai", formData, { headers: { "Content-Type": "multipart/form-data" } });
+      const res = await client.post("/policies/extract-ai", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
       applyAIScanFields(res.data);
       setScannedFrom(file.name);
       notify(`AI analysis complete for ${file.name}`);
     } catch (err) {
-      if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet - use the standard scan instead");
-      else notify(apiError(err));
+      if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet - use the standard scan instead", true);
+      else notify(apiError(err), true);
     } finally { setAnalyzingAI(false); }
   };
 
@@ -221,7 +221,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       // Policy documents the person tagged as such float to the top - most likely what they want here.
       docs.sort((a, b) => (b.category === "policy_document") - (a.category === "policy_document"));
       setPickerDocuments(docs);
-    } catch (err) { notify(apiError(err)); setDocPicker(null); }
+    } catch (err) { notify(apiError(err), true); setDocPicker(null); }
   };
 
   const pickDocument = async (doc) => {
@@ -248,8 +248,8 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       }
       setDocPicker(null);
     } catch (err) {
-      if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet");
-      else notify(apiError(err));
+      if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet", true);
+      else notify(apiError(err), true);
     } finally { setPickerBusy(null); }
   };
 
@@ -270,12 +270,12 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       setAiInsights(null);
       setShowForm(false);
       load();
-    } catch (err) { notify(apiError(err)); } finally { setBusy(false); }
+    } catch (err) { notify(apiError(err), true); } finally { setBusy(false); }
   };
 
   const remove = async (id) => {
     try { await client.delete(`/policies/${id}`); notify("Policy removed"); load(); }
-    catch (err) { notify(apiError(err)); }
+    catch (err) { notify(apiError(err), true); }
   };
 
   if (policies === null) return <div className="page-loading" data-testid="policies-loading">Loading policies…</div>;
@@ -482,7 +482,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                       try {
                         const res = await client.get(`/policies/${detailsPolicy.id}/check-condition`, { params: { condition: conditionQuery } });
                         setConditionResult(res.data);
-                      } catch (err) { notify(apiError(err)); } finally { setConditionChecking(false); }
+                      } catch (err) { notify(apiError(err), true); } finally { setConditionChecking(false); }
                     }}
                   >
                     {conditionChecking ? "Checking…" : "Check"}
@@ -524,7 +524,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                                   try {
                                     const res = await client.get(`/policies/${detailsPolicy.id}/check-condition`, { params: { condition: c } });
                                     setConditionResult(res.data);
-                                  } catch (err) { notify(apiError(err)); } finally { setConditionChecking(false); }
+                                  } catch (err) { notify(apiError(err), true); } finally { setConditionChecking(false); }
                                 }}
                               >
                                 {c}
@@ -643,7 +643,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                   try {
                     const res = await client.get(`/policies/${hospitalPolicy.id}/network-hospitals`, { params: { city: hospitalCity || undefined } });
                     setHospitalResult(res.data);
-                  } catch (err) { notify(apiError(err)); } finally { setHospitalLoading(false); }
+                  } catch (err) { notify(apiError(err), true); } finally { setHospitalLoading(false); }
                 }}
               >
                 {hospitalLoading ? "Looking…" : "Find hospitals"}

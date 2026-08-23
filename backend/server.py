@@ -164,7 +164,7 @@ def storage_load(stored_ref: str) -> bytes:
     return path.read_bytes()
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", 15 * 1024 * 1024))
 ALLOWED_UPLOAD_TYPES = {
-    "application/pdf", "image/jpeg", "image/png", "image/webp", "image/heic",
+    "application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic",
     "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 

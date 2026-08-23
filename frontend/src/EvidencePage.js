@@ -23,7 +23,7 @@ export default function EvidencePage({ canEdit, notify }) {
   const activeItemId = useRef(null);
 
   const load = () => {
-    client.get("/evidence").then((r) => setItems(r.data.items)).catch((err) => notify(apiError(err)));
+    client.get("/evidence").then((r) => setItems(r.data.items)).catch((err) => notify(apiError(err), true));
     client.get("/documents").then((r) => {
       const byItem = {};
       for (const doc of r.data.documents) {
@@ -44,12 +44,12 @@ export default function EvidencePage({ canEdit, notify }) {
       setForm(emptyForm);
       setShowForm(false);
       load();
-    } catch (err) { notify(apiError(err)); } finally { setBusy(false); }
+    } catch (err) { notify(apiError(err), true); } finally { setBusy(false); }
   };
 
   const remove = async (id) => {
     try { await client.delete(`/evidence/${id}`); notify("Item removed"); load(); }
-    catch (err) { notify(apiError(err)); }
+    catch (err) { notify(apiError(err), true); }
   };
 
   const openFilePicker = (itemId) => { activeItemId.current = itemId; fileInputRef.current?.click(); };
@@ -69,12 +69,12 @@ export default function EvidencePage({ canEdit, notify }) {
       await client.post("/documents", formData, { headers: { "Content-Type": "multipart/form-data" } });
       notify("Bill copy added");
       load();
-    } catch (err) { notify(apiError(err)); } finally { setUploadingFor(null); }
+    } catch (err) { notify(apiError(err), true); } finally { setUploadingFor(null); }
   };
 
   const removeDocument = async (docId) => {
     try { await client.delete(`/documents/${docId}`); notify("Removed"); load(); }
-    catch (err) { notify(apiError(err)); }
+    catch (err) { notify(apiError(err), true); }
   };
 
   const download = (doc) => window.open(`${API}/documents/${doc.id}/download`, "_blank");
