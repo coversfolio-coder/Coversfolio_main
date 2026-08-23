@@ -129,7 +129,19 @@ def storage_save(key: str, contents: bytes, content_type: str) -> str:
     object key when STORAGE_BACKEND=s3. Callers should treat the return value
     as opaque and pass it straight to storage_delete/storage_download_response."""
     if STORAGE_BACKEND == "s3":
-        get_s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=contents, ContentType=content_type)
+        try:
+            get_s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=contents, ContentType=content_type)
+        except Exception as exc:
+            # The default exception string only surfaces Code and Message - for
+            # InvalidArgument errors specifically, S3-compatible APIs often
+            # include an ArgumentName/ArgumentValue field pointing at exactly
+            # what's wrong, which is otherwise invisible. Logging the full
+            # response dict here turns "InvalidArgument: None" into something
+            # actually actionable the next time this happens.
+            response = getattr(exc, "response", None)
+            logger.error("S3 put_object failed for key=%s content_type=%r bucket=%s endpoint=%s region=%s - full response: %s",
+                         key, content_type, S3_BUCKET, S3_ENDPOINT_URL, S3_REGION, response)
+            raise
         return key
     path = STORAGE_ROOT / key
     path.parent.mkdir(parents=True, exist_ok=True)
