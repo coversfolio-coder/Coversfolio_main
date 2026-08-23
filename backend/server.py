@@ -129,18 +129,26 @@ def storage_save(key: str, contents: bytes, content_type: str) -> str:
     object key when STORAGE_BACKEND=s3. Callers should treat the return value
     as opaque and pass it straight to storage_delete/storage_download_response."""
     if STORAGE_BACKEND == "s3":
+        # Uploading via boto3's put_object() directly hits a real, documented
+        # compatibility issue: botocore's own HTTP transport adds an
+        # "Expect: 100-continue" header to S3 PUT requests, with no supported
+        # way to turn it off. Several S3-compatible backends' proxy layers
+        # don't implement that handshake correctly and reject the request with
+        # an opaque, message-less error - exactly what was happening here.
+        # Generating a presigned URL and sending the actual PUT through httpx
+        # instead uses the same signed credentials but sidesteps botocore's
+        # transport layer (and that header) entirely.
         try:
-            get_s3_client().put_object(Bucket=S3_BUCKET, Key=key, Body=contents, ContentType=content_type)
+            presigned_url = get_s3_client().generate_presigned_url(
+                "put_object", Params={"Bucket": S3_BUCKET, "Key": key, "ContentType": content_type}, ExpiresIn=120,
+            )
+            response = httpx.put(presigned_url, content=contents, headers={"Content-Type": content_type}, timeout=60.0)
+            response.raise_for_status()
         except Exception as exc:
-            # The default exception string only surfaces Code and Message - for
-            # InvalidArgument errors specifically, S3-compatible APIs often
-            # include an ArgumentName/ArgumentValue field pointing at exactly
-            # what's wrong, which is otherwise invisible. Logging the full
-            # response dict here turns "InvalidArgument: None" into something
-            # actually actionable the next time this happens.
-            response = getattr(exc, "response", None)
-            logger.error("S3 put_object failed for key=%s content_type=%r bucket=%s endpoint=%s region=%s - full response: %s",
-                         key, content_type, S3_BUCKET, S3_ENDPOINT_URL, S3_REGION, response)
+            detail = getattr(exc, "response", None)
+            detail_text = detail.text if hasattr(detail, "text") else detail
+            logger.error("S3 upload failed for key=%s content_type=%r bucket=%s endpoint=%s region=%s - response: %s",
+                         key, content_type, S3_BUCKET, S3_ENDPOINT_URL, S3_REGION, detail_text)
             raise
         return key
     path = STORAGE_ROOT / key
@@ -1528,7 +1536,7 @@ async def _load_document_for_extraction(document_id: str, user: dict, allowed_ty
     if doc["content_type"] not in allowed_types:
         raise HTTPException(status_code=415, detail="This document isn't a supported file type for this feature")
     try:
-        contents = storage_load(doc["stored_path"])
+        contents = await asyncio.to_thread(storage_load, doc["stored_path"])
     except (FileNotFoundError, Exception) as exc:
         raise HTTPException(status_code=404, detail="The file for this document is no longer available in storage") from exc
     if len(contents) == 0:
@@ -1951,7 +1959,11 @@ async def upload_document(
     doc_id = str(uuid.uuid4())
     ext = Path(_safe_filename(file.filename or "")).suffix
     storage_key = f"{user['household_id']}/{doc_id}{ext}"
-    stored_path = storage_save(storage_key, contents, file.content_type)
+    # storage_save does blocking network I/O (boto3/httpx) - calling it directly
+    # here would freeze the whole server's event loop, for every user, for the
+    # full duration of every single upload. Same fix as applied earlier to the
+    # Gemini AI analysis call, and for the same reason.
+    stored_path = await asyncio.to_thread(storage_save, storage_key, contents, file.content_type)
 
     now = datetime.now(timezone.utc).isoformat()
     doc = {
@@ -2012,7 +2024,7 @@ async def download_document(document_id: str, user: dict = Depends(current_user)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     if STORAGE_BACKEND == "s3":
-        if not storage_exists(doc["stored_path"]):
+        if not await asyncio.to_thread(storage_exists, doc["stored_path"]):
             raise HTTPException(status_code=404, detail="File is no longer available")
         # A short-lived presigned URL - the client downloads directly from
         # object storage rather than proxying the file's bytes through our own
@@ -2035,7 +2047,7 @@ async def delete_document(document_id: str, user: dict = Depends(current_user)):
     doc = await db.documents.find_one({"id": document_id, "household_id": user["household_id"]}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    storage_delete(doc["stored_path"])
+    await asyncio.to_thread(storage_delete, doc["stored_path"])
     await db.documents.delete_one({"id": document_id, "household_id": user["household_id"]})
     await audit(user, "document_removed", f"Removed '{doc['filename']}'")
     return {"ok": True}
