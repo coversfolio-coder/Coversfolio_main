@@ -80,7 +80,7 @@ button.profile:hover{background:rgba(255,255,255,.05)}button.profile svg{color:#
 .account-menu-list button.danger:hover{background:#fdf1f1}
 
 /* ---- Dashboard redesign: KPI row, panels, policy cards, claim packets table ---- */
-.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:36px}
+.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:36px}
 .kpi{background:var(--paper);border-radius:14px;padding:18px 20px;box-shadow:var(--card-shadow, 0 1px 2px rgba(11,31,63,.05),0 10px 28px rgba(11,31,63,.07))}
 .kpi .k-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
 .kpi .k-value{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:23px;color:var(--navy);margin-top:8px}

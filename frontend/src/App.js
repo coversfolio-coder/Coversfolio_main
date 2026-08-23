@@ -36,7 +36,7 @@ const fallback = {
   deadlines: [],
   policies: [],
   onboarding: { steps: [], all_done: true, dismissed: true },
-  kpis: { active_policies: 0, insurer_count: 0, total_sum_insured: 0, packets_in_progress: 0, overdue_sla_count: 0 }
+  kpis: { active_policies: 0, insurer_count: 0, total_sum_insured: 0, packets_in_progress: 0 }
 };
 
 const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID;
@@ -225,7 +225,6 @@ function App() {
           <div className="kpi" data-testid="kpi-active-policies"><div className="k-label">Active policies</div><div className="k-value">{data.kpis.active_policies}</div><div className="k-sub">{data.kpis.insurer_count} insurer{data.kpis.insurer_count === 1 ? "" : "s"}</div></div>
           <div className="kpi" data-testid="kpi-sum-insured"><div className="k-label">Total sum insured</div><div className="k-value accent">{formatINR(data.kpis.total_sum_insured)}</div><div className="k-sub">across household</div></div>
           <div className="kpi" data-testid="kpi-packets-in-progress"><div className="k-label">Claim packets in progress</div><div className="k-value warn">{data.kpis.packets_in_progress}</div><div className="k-sub">not yet ready to submit</div></div>
-          <div className="kpi" data-testid="kpi-overdue-sla"><div className="k-label">Overdue SLAs</div><div className={data.kpis.overdue_sla_count > 0 ? "k-value crit" : "k-value"}>{data.kpis.overdue_sla_count}</div><div className="k-sub">{data.kpis.overdue_sla_count > 0 ? "needs action today" : "all on track"}</div></div>
         </div>}
 
         {data.onboarding && !data.onboarding.all_done && !data.onboarding.dismissed && (

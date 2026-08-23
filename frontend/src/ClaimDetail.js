@@ -1,18 +1,10 @@
 import { Fragment, useEffect, useState } from "react";
 import client, { API, apiError } from "@/api";
 import {
-  X, FileText, MessageSquare, IndianRupee, Milestone, AlertTriangle,
-  Undo2, Check, Plus, ClipboardList, ShieldAlert, Timer, PlayCircle, CheckCircle2, Files, Link2, FileSpreadsheet
+  X, FileText, MessageSquare, IndianRupee, AlertTriangle,
+  Undo2, Check, Plus, ClipboardList, ShieldAlert, CheckCircle2, Files, Link2, FileSpreadsheet
 } from "lucide-react";
 
-
-const STAGES = [
-  { label: "Documents in review", progress: 30 },
-  { label: "Pre-authorisation", progress: 45 },
-  { label: "Insurer query raised", progress: 55 },
-  { label: "Awaiting settlement", progress: 75 },
-  { label: "Documents submitted", progress: 85 },
-];
 
 const STATUS_TONE = {
   in_progress: { label: "In progress", tone: "teal" },
@@ -25,39 +17,14 @@ const STATUS_TONE = {
 const format = (iso) => new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 const inr = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
 
-function Countdown({ startedAt, hours }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const deadline = new Date(startedAt).getTime() + hours * 3600 * 1000;
-  const diffMs = deadline - now;
-  const overdue = diffMs < 0;
-  const abs = Math.abs(diffMs);
-  const totalMinutes = Math.floor(abs / 60000);
-  const days = Math.floor(totalMinutes / 1440);
-  const hrs = Math.floor((totalMinutes % 1440) / 60);
-  const mins = totalMinutes % 60;
-  const secs = Math.floor((abs % 60000) / 1000);
-  const text = days > 0 ? `${days}d ${hrs}h ${mins}m` : `${hrs}h ${mins}m ${secs}s`;
-  return (
-    <span className={overdue ? "sla-countdown sla-overdue" : "sla-countdown sla-active"} data-testid="sla-countdown">
-      {overdue ? `Overdue by ${text}` : `${text} remaining`}
-    </span>
-  );
-}
-
 export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notify }) {
   const [claim, setClaim] = useState(null);
-  const [sla, setSla] = useState(null);
   const [packet, setPacket] = useState(null);
   const [claimForm, setClaimForm] = useState(null);
-  const [tab, setTab] = useState("timeline");
+  const [tab, setTab] = useState(null);
   const [note, setNote] = useState("");
   const [query, setQuery] = useState({ question: "", source: "Insurer" });
   const [settlement, setSettlement] = useState({ amount: "", kind: "partial", note: "" });
-  const [stage, setStage] = useState({ stage: STAGES[0].label, progress: STAGES[0].progress, note: "" });
   const [reason, setReason] = useState("");
   const [hospForm, setHospForm] = useState({
     patient_name: "", hospital_name: "", admission_date: "", discharge_date: "", diagnosis: "", is_maternity: false,
@@ -96,14 +63,16 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
         reported_to_police: !!res.data.reported_to_police, mlc_report_attached: !!res.data.mlc_report_attached,
         system_of_medicine: res.data.system_of_medicine || "",
       });
-      const slaRes = await client.get(`/claims/${claimId}/sla`);
-      setSla(slaRes.data);
       const packetRes = await client.get(`/claims/${claimId}/document-packet`);
       setPacket(packetRes.data);
       if (res.data.type === "Reimbursement") {
         const formRes = await client.get(`/claims/${claimId}/claim-form`);
         setClaimForm(formRes.data);
       }
+      // Default to the most useful tab for this claim type - only on first
+      // load, so switching tabs manually afterward (e.g. after saving hospitalization
+      // details triggers a refresh) doesn't keep yanking the person back.
+      setTab((prev) => prev || (res.data.type === "Reimbursement" ? "claimform" : "packet"));
     } catch (err) { notify(apiError(err)); onClose(); }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,8 +85,6 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
     catch (err) { notify(apiError(err)); }
   };
 
-  const startSla = (slaType) => call(async () => { await client.post(`/claims/${claimId}/sla/start`, { sla_type: slaType }); }, "SLA clock started");
-  const resolveSla = (eventId) => call(async () => { await client.post(`/claims/${claimId}/sla/${eventId}/resolve`); }, "Marked resolved");
   const attachDocument = (docId) => call(async () => { await client.post(`/documents/${docId}/link`, { linked_claim_id: claimId }); }, "Document attached");
 
   const saveHospitalization = async (e) => {
@@ -146,10 +113,6 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
     if (!settlement.amount) return;
     call(async () => { await client.post(`/claims/${claimId}/settlements`, { ...settlement, amount: Number(settlement.amount) }); setSettlement({ amount: "", kind: "partial", note: "" }); }, "Settlement recorded");
   };
-  const submitStage = (e) => {
-    e.preventDefault();
-    call(async () => { await client.post(`/claims/${claimId}/stage`, stage); setStage({ ...stage, note: "" }); }, "Stage updated");
-  };
   const changeStatus = (status) => {
     call(async () => { await client.post(`/claims/${claimId}/status`, { status, reason }); setReason(""); }, `Marked ${status}`);
   };
@@ -164,13 +127,10 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   const settledTotal = (claim.settlements || []).filter(s => s.kind !== "deduction").reduce((a, s) => a + s.amount, 0);
   const openQueries = (claim.queries || []).filter(q => q.status === "open").length;
 
-  const activeSlaCount = (sla?.events || []).filter(e => !e.resolved_at).length;
   const missingCount = packet ? packet.sections.filter(s => s.status === "missing").length : 0;
   const tabs = [
-    { id: "timeline", label: "Timeline", icon: Milestone, count: (claim.stage_history || []).length },
-    { id: "sla", label: "SLA tracking", icon: Timer, count: activeSlaCount },
-    { id: "packet", label: "Document packet", icon: Files, count: missingCount },
     ...(claim.type === "Reimbursement" ? [{ id: "claimform", label: "Claim form", icon: FileSpreadsheet, count: 0 }] : []),
+    { id: "packet", label: "Document packet", icon: Files, count: missingCount },
     { id: "notes", label: "Notes", icon: FileText, count: (claim.notes || []).length },
     { id: "queries", label: "Insurer queries", icon: MessageSquare, count: openQueries },
     { id: "settlements", label: "Settlements", icon: IndianRupee, count: (claim.settlements || []).length },
@@ -207,82 +167,6 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
         </nav>
 
         <div className="drawer-body">
-          {tab === "timeline" && (
-            <section data-testid="tab-panel-timeline">
-              <ol className="timeline">
-                {(claim.stage_history || []).slice().reverse().map((h, i) => (
-                  <li key={i}><span className="tl-dot" /><div><strong>{h.stage}</strong><small>{format(h.at)} · {h.by || "Household"}</small>{h.note && <p>{h.note}</p>}</div></li>
-                ))}
-              </ol>
-              {canEdit ? (
-                <form onSubmit={submitStage} className="stack-form" data-testid="advance-stage-form">
-                  <label>Advance to<select data-testid="stage-select" value={stage.stage} onChange={e => { const s = STAGES.find(x => x.label === e.target.value); setStage({ ...stage, stage: s.label, progress: s.progress }); }}>{STAGES.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}</select></label>
-                  <label>Add a note (optional)<textarea rows="2" value={stage.note} onChange={e => setStage({ ...stage, note: e.target.value })} placeholder="Anything worth remembering" data-testid="stage-note-input" /></label>
-                  <button className="primary-button" data-testid="advance-stage-submit"><Plus size={14} /> Save stage</button>
-                </form>
-              ) : <p className="readonly-hint">Only owners and household members can update stages.</p>}
-            </section>
-          )}
-
-          {tab === "sla" && sla && (
-            <section data-testid="tab-panel-sla">
-              <p className="readonly-hint" style={{ marginBottom: 14 }}>
-                These windows come from IRDAI's Master Circular on Health Insurance Business and the "Cashless Everywhere" initiative. Start a clock the moment the real-world event happens (e.g. the hospital submits the pre-authorization request) - Coversfolio just tracks the deadline, it doesn't talk to your insurer.
-              </p>
-
-              {(sla.events || []).length > 0 && (
-                <div className="entry-list" style={{ marginBottom: 18 }}>
-                  {sla.events.map((event) => (
-                    <article className="entry" key={event.id} data-testid={`sla-event-${event.id}`}>
-                      <header>
-                        <span className="claim-icon" style={{ width: 32, height: 32 }}><Timer size={15} /></span>
-                        <div style={{ flex: 1 }}>
-                          <strong>{event.label}</strong>
-                          <small style={{ display: "block" }}>Started {format(event.started_at)}</small>
-                        </div>
-                        {event.resolved_at ? (
-                          <span className="chip chip-teal"><CheckCircle2 size={12} style={{ verticalAlign: -2 }} /> Resolved {format(event.resolved_at)}</span>
-                        ) : (
-                          canEdit && <button className="text-button" data-testid={`resolve-sla-${event.id}`} onClick={() => resolveSla(event.id)}><Check size={13} /> Mark resolved</button>
-                        )}
-                      </header>
-                      {!event.resolved_at && <p><Countdown startedAt={event.started_at} hours={event.hours} /></p>}
-                    </article>
-                  ))}
-                </div>
-              )}
-
-              {canEdit && (
-                <div>
-                  <label style={{ marginBottom: 8, display: "block", fontSize: 12, fontWeight: 600 }}>Start a clock</label>
-                  <div className="card-grid">
-                    {Object.entries(sla.applicable || {}).map(([slaType, def]) => {
-                      const alreadyActive = (sla.events || []).some(e => e.sla_type === slaType && !e.resolved_at);
-                      return (
-                        <button
-                          key={slaType}
-                          type="button"
-                          className="scan-upload-button"
-                          disabled={alreadyActive}
-                          onClick={() => startSla(slaType)}
-                          data-testid={`start-sla-${slaType}`}
-                          style={{ marginBottom: 0 }}
-                        >
-                          <PlayCircle size={16} />
-                          <span>
-                            <strong>{def.label} ({def.hours < 24 ? `${def.hours}h` : `${Math.round(def.hours / 24)}d`})</strong>
-                            <small>{alreadyActive ? "Already tracking" : def.citation}</small>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              {!canEdit && (sla.events || []).length === 0 && <p className="empty-hint">No SLA clocks started on this claim yet.</p>}
-            </section>
-          )}
-
           {tab === "packet" && packet && (
             <section data-testid="tab-panel-packet">
               <p className="readonly-hint" style={{ marginBottom: 14 }}>
