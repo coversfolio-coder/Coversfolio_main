@@ -65,14 +65,12 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
       });
       const packetRes = await client.get(`/claims/${claimId}/document-packet`);
       setPacket(packetRes.data);
-      if (res.data.type === "Reimbursement") {
-        const formRes = await client.get(`/claims/${claimId}/claim-form`);
-        setClaimForm(formRes.data);
-      }
+      const formRes = await client.get(`/claims/${claimId}/claim-form`);
+      setClaimForm(formRes.data);
       // Default to the most useful tab for this claim type - only on first
       // load, so switching tabs manually afterward (e.g. after saving hospitalization
       // details triggers a refresh) doesn't keep yanking the person back.
-      setTab((prev) => prev || (res.data.type === "Reimbursement" ? "claimform" : "packet"));
+      setTab((prev) => prev || "claimform");
     } catch (err) { notify(apiError(err)); onClose(); }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -138,7 +136,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
 
   const missingCount = packet ? packet.sections.filter(s => s.status === "missing").length : 0;
   const tabs = [
-    ...(claim.type === "Reimbursement" ? [{ id: "claimform", label: "Claim form", icon: FileSpreadsheet, count: 0 }] : []),
+    { id: "claimform", label: claim.type === "Reimbursement" ? "Claim form" : "Pre-auth prep", icon: FileSpreadsheet, count: 0 },
     { id: "packet", label: "Document packet", icon: Files, count: missingCount },
     { id: "notes", label: "Notes", icon: FileText, count: (claim.notes || []).length },
     { id: "queries", label: "Insurer queries", icon: MessageSquare, count: openQueries },
@@ -214,17 +212,20 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
           {tab === "claimform" && (
             <section data-testid="tab-panel-claimform">
               <p className="readonly-hint" style={{ marginBottom: 18 }}>
-                Enter the hospitalization details once, and this compiles a reference summary from your linked documents - bills sorted into pre/during/post-hospitalization with real totals, plus a field-by-field cheat sheet for the insurer's own form. It doesn't replace the insurer's Claim Form Part A (needs your signature) or Part B (needs the hospital's) - it makes filling either one transcription instead of a from-scratch reconstruction.
+                {claim.type === "Reimbursement"
+                  ? "Enter the hospitalization details once, and this compiles a reference summary from your linked documents - bills sorted into pre/during/post-hospitalization with real totals, plus a field-by-field cheat sheet for the insurer's own form. It doesn't replace the insurer's Claim Form Part A (needs your signature) or Part B (needs the hospital's) - it makes filling either one transcription instead of a from-scratch reconstruction."
+                  : "Enter the hospitalization details once, and this compiles a field-by-field cheat sheet covering what a hospital's pre-authorization desk typically asks for - policy, patient, and hospitalization details. Since the insurer settles directly with the hospital on a cashless claim, there's no bill total or bank detail step here."}
               </p>
 
               {(() => {
                 const detailsDone = !!(hospForm.patient_name && hospForm.hospital_name && hospForm.admission_date && hospForm.discharge_date);
-                const billsDone = !!(claimForm && claimForm.grand_total > 0);
+                const isReimbursement = claim.type === "Reimbursement";
+                const billsDone = !isReimbursement || !!(claimForm && claimForm.grand_total > 0);
                 const sheetReady = detailsDone && billsDone;
                 const steps = [
                   { label: "Hospitalization details", done: detailsDone, hint: detailsDone ? "Saved" : "Fill in below" },
-                  { label: "Bills & documents", done: billsDone, hint: billsDone ? `${inr(claimForm?.grand_total)} logged` : "Upload bills with amounts" },
-                  { label: "Cheat sheet & export", done: sheetReady, hint: sheetReady ? "Ready to copy" : "Complete steps 1-2" },
+                  ...(isReimbursement ? [{ label: "Bills & documents", done: billsDone, hint: billsDone ? `${inr(claimForm?.grand_total)} logged` : "Upload bills with amounts" }] : []),
+                  { label: "Cheat sheet ready", done: sheetReady, hint: sheetReady ? "Ready to copy" : "Complete step 1" + (isReimbursement ? "-2" : "") },
                 ];
                 return (
                   <div className="cf-steps" data-testid="claimform-step-tracker">
@@ -347,66 +348,68 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
 
               {claimForm && (
                 <>
-                  <div className="cf-card">
-                    <div className="cf-card-head">
-                      <h3>Bills &amp; documents</h3>
-                      <p>Sorted automatically into pre/during/post-hospitalization using the dates above and each document's bill date.</p>
+                  {claimForm.coverage_check && (
+                    <div
+                      className={claimForm.coverage_check.matched
+                        ? (claimForm.coverage_check.waiting_status?.covered_now === false || claimForm.coverage_check.covered === false ? "attention-strip" : "ai-insights-panel")
+                        : "empty-hint"}
+                      style={{ marginBottom: 16 }}
+                      data-testid="claimform-coverage-check"
+                    >
+                      {claimForm.coverage_check.matched ? (
+                        <>
+                          <p style={{ margin: 0, fontSize: 12 }}>
+                            <strong>Coverage check — {claimForm.coverage_check.condition}:</strong>{" "}
+                            {claimForm.coverage_check.covered === false ? (
+                              <span className="chip chip-red">Not covered per this policy</span>
+                            ) : claimForm.coverage_check.waiting_status?.covered_now === false ? (
+                              <span className="chip chip-amber">Waiting period active — {claimForm.coverage_check.waiting_status.days_remaining} days left</span>
+                            ) : claimForm.coverage_check.waiting_status?.covered_now === true ? (
+                              <span className="chip chip-teal">Waiting period has passed — covered</span>
+                            ) : (
+                              <span className="chip chip-neutral">Covered, no waiting period stated</span>
+                            )}
+                          </p>
+                          {claimForm.coverage_check.notes && <p style={{ fontSize: 11, color: "var(--muted)", margin: "6px 0 0" }}>{claimForm.coverage_check.notes}</p>}
+                        </>
+                      ) : (
+                        <p style={{ fontSize: 12, margin: 0 }}>{claimForm.coverage_check.message}</p>
+                      )}
                     </div>
+                  )}
 
-                    {claimForm.coverage_check && (
-                      <div
-                        className={claimForm.coverage_check.matched
-                          ? (claimForm.coverage_check.waiting_status?.covered_now === false || claimForm.coverage_check.covered === false ? "attention-strip" : "ai-insights-panel")
-                          : "empty-hint"}
-                        style={{ marginBottom: 16 }}
-                        data-testid="claimform-coverage-check"
-                      >
-                        {claimForm.coverage_check.matched ? (
-                          <>
-                            <p style={{ margin: 0, fontSize: 12 }}>
-                              <strong>Coverage check — {claimForm.coverage_check.condition}:</strong>{" "}
-                              {claimForm.coverage_check.covered === false ? (
-                                <span className="chip chip-red">Not covered per this policy</span>
-                              ) : claimForm.coverage_check.waiting_status?.covered_now === false ? (
-                                <span className="chip chip-amber">Waiting period active — {claimForm.coverage_check.waiting_status.days_remaining} days left</span>
-                              ) : claimForm.coverage_check.waiting_status?.covered_now === true ? (
-                                <span className="chip chip-teal">Waiting period has passed — covered</span>
-                              ) : (
-                                <span className="chip chip-neutral">Covered, no waiting period stated</span>
-                              )}
-                            </p>
-                            {claimForm.coverage_check.notes && <p style={{ fontSize: 11, color: "var(--muted)", margin: "6px 0 0" }}>{claimForm.coverage_check.notes}</p>}
-                          </>
-                        ) : (
-                          <p style={{ fontSize: 12, margin: 0 }}>{claimForm.coverage_check.message}</p>
-                        )}
+                  {claim.type === "Reimbursement" && (
+                    <div className="cf-card">
+                      <div className="cf-card-head">
+                        <h3>Bills &amp; documents</h3>
+                        <p>Sorted automatically into pre/during/post-hospitalization using the dates above and each document's bill date.</p>
                       </div>
-                    )}
 
-                    {claimForm.missing_hospitalization_dates && (
-                      <div className="cf-notice" data-testid="claimform-missing-dates-hint">
-                        Add admission and discharge dates above to sort bills into pre/during/post-hospitalization automatically.
+                      {claimForm.missing_hospitalization_dates && (
+                        <div className="cf-notice" data-testid="claimform-missing-dates-hint">
+                          Add admission and discharge dates above to sort bills into pre/during/post-hospitalization automatically.
+                        </div>
+                      )}
+
+                      <div className="card-grid">
+                        {[
+                          { key: "pre_hospitalization", label: "Pre-hospitalization" },
+                          { key: "hospitalization", label: "Hospitalization" },
+                          { key: "post_hospitalization", label: "Post-hospitalization" },
+                        ].map(({ key, label }) => (
+                          <article className="entry" key={key} data-testid={`claimform-bucket-${key}`}>
+                            <strong style={{ fontSize: 12 }}>{label}</strong>
+                            <p style={{ fontSize: 16, margin: "6px 0 0", fontWeight: 700 }}>{inr(claimForm.bills[key].total)}</p>
+                            <small style={{ color: "var(--muted)" }}>{claimForm.bills[key].items.length} document{claimForm.bills[key].items.length === 1 ? "" : "s"}</small>
+                          </article>
+                        ))}
                       </div>
-                    )}
 
-                    <div className="card-grid">
-                      {[
-                        { key: "pre_hospitalization", label: "Pre-hospitalization" },
-                        { key: "hospitalization", label: "Hospitalization" },
-                        { key: "post_hospitalization", label: "Post-hospitalization" },
-                      ].map(({ key, label }) => (
-                        <article className="entry" key={key} data-testid={`claimform-bucket-${key}`}>
-                          <strong style={{ fontSize: 12 }}>{label}</strong>
-                          <p style={{ fontSize: 16, margin: "6px 0 0", fontWeight: 700 }}>{inr(claimForm.bills[key].total)}</p>
-                          <small style={{ color: "var(--muted)" }}>{claimForm.bills[key].items.length} document{claimForm.bills[key].items.length === 1 ? "" : "s"}</small>
-                        </article>
-                      ))}
+                      <div className="cf-totalbox" data-testid="claimform-grand-total">
+                        <div><span>Total claim expenses</span><strong>{inr(claimForm.grand_total)}</strong></div>
+                      </div>
                     </div>
-
-                    <div className="cf-totalbox" data-testid="claimform-grand-total">
-                      <div><span>Total claim expenses</span><strong>{inr(claimForm.grand_total)}</strong></div>
-                    </div>
-                  </div>
+                  )}
 
                   <div className="cf-card">
                     <div className="cf-card-head">
@@ -481,25 +484,27 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                         </div>
                       ))}
 
-                      <div>
-                        <p style={{ margin: "0 0 8px" }}><span className="cf-section-badge">Section G</span><strong style={{ fontSize: 12 }}>Details of primary insured's bank account</strong></p>
-                        <div className="cf-notice" style={{ marginBottom: 12 }}>
-                          Typed here only to lay it out for you to copy - this stays in your browser for this session only. Coversfolio never saves or transmits your bank/PAN details.
+                      {claim.type === "Reimbursement" && (
+                        <div>
+                          <p style={{ margin: "0 0 8px" }}><span className="cf-section-badge">Section G</span><strong style={{ fontSize: 12 }}>Details of primary insured's bank account</strong></p>
+                          <div className="cf-notice" style={{ marginBottom: 12 }}>
+                            Typed here only to lay it out for you to copy - this stays in your browser for this session only. Coversfolio never saves or transmits your bank/PAN details.
+                          </div>
+                          <div className="row-2">
+                            <label style={{ fontSize: 11 }}>TPA / Company membership ID<input value={bankForm.tpa_membership_id} onChange={(e) => setBankForm({ ...bankForm, tpa_membership_id: e.target.value })} data-testid="bank-tpa-id-input" /></label>
+                            <label style={{ fontSize: 11 }}>PAN<input value={bankForm.pan_number} onChange={(e) => setBankForm({ ...bankForm, pan_number: e.target.value.toUpperCase() })} maxLength={10} data-testid="bank-pan-input" /></label>
+                          </div>
+                          <div className="row-2">
+                            <label style={{ fontSize: 11 }}>Account holder name<input value={bankForm.bank_account_holder} onChange={(e) => setBankForm({ ...bankForm, bank_account_holder: e.target.value })} data-testid="bank-holder-input" /></label>
+                            <label style={{ fontSize: 11 }}>Account number<input value={bankForm.bank_account_number} onChange={(e) => setBankForm({ ...bankForm, bank_account_number: e.target.value })} data-testid="bank-account-number-input" /></label>
+                          </div>
+                          <div className="row-2">
+                            <label style={{ fontSize: 11 }}>Bank name and branch<input value={bankForm.bank_name_branch} onChange={(e) => setBankForm({ ...bankForm, bank_name_branch: e.target.value })} data-testid="bank-name-branch-input" /></label>
+                            <label style={{ fontSize: 11 }}>IFSC code<input value={bankForm.ifsc_code} onChange={(e) => setBankForm({ ...bankForm, ifsc_code: e.target.value.toUpperCase() })} maxLength={11} data-testid="bank-ifsc-input" /></label>
+                          </div>
+                          <label style={{ fontSize: 11 }}>Cheque / DD payable to<input value={bankForm.cheque_payable_name} onChange={(e) => setBankForm({ ...bankForm, cheque_payable_name: e.target.value })} data-testid="bank-cheque-payable-input" /></label>
                         </div>
-                        <div className="row-2">
-                          <label style={{ fontSize: 11 }}>TPA / Company membership ID<input value={bankForm.tpa_membership_id} onChange={(e) => setBankForm({ ...bankForm, tpa_membership_id: e.target.value })} data-testid="bank-tpa-id-input" /></label>
-                          <label style={{ fontSize: 11 }}>PAN<input value={bankForm.pan_number} onChange={(e) => setBankForm({ ...bankForm, pan_number: e.target.value.toUpperCase() })} maxLength={10} data-testid="bank-pan-input" /></label>
-                        </div>
-                        <div className="row-2">
-                          <label style={{ fontSize: 11 }}>Account holder name<input value={bankForm.bank_account_holder} onChange={(e) => setBankForm({ ...bankForm, bank_account_holder: e.target.value })} data-testid="bank-holder-input" /></label>
-                          <label style={{ fontSize: 11 }}>Account number<input value={bankForm.bank_account_number} onChange={(e) => setBankForm({ ...bankForm, bank_account_number: e.target.value })} data-testid="bank-account-number-input" /></label>
-                        </div>
-                        <div className="row-2">
-                          <label style={{ fontSize: 11 }}>Bank name and branch<input value={bankForm.bank_name_branch} onChange={(e) => setBankForm({ ...bankForm, bank_name_branch: e.target.value })} data-testid="bank-name-branch-input" /></label>
-                          <label style={{ fontSize: 11 }}>IFSC code<input value={bankForm.ifsc_code} onChange={(e) => setBankForm({ ...bankForm, ifsc_code: e.target.value.toUpperCase() })} maxLength={11} data-testid="bank-ifsc-input" /></label>
-                        </div>
-                        <label style={{ fontSize: 11 }}>Cheque / DD payable to<input value={bankForm.cheque_payable_name} onChange={(e) => setBankForm({ ...bankForm, cheque_payable_name: e.target.value })} data-testid="bank-cheque-payable-input" /></label>
-                      </div>
+                      )}
                     </div>
                   )}
                 </>

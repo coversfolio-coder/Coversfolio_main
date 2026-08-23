@@ -76,11 +76,31 @@ function GoogleSignInButton({ onAuthenticated, onError, consentGiven }) {
 }
 
 function AuthScreen({ onAuthenticated }) {
-  const [mode, setMode] = useState("login");
+  const [mode, setMode] = useState("login"); // "login" | "register" | "forgot" | "reset"
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSent, setForgotSent] = useState(false);
+  const [resetToken, setResetToken] = useState(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirm, setResetConfirm] = useState("");
+  const [resetDone, setResetDone] = useState(false);
+
+  // A password-reset email link lands here as /?token=... (or /reset-password?token=...
+  // depending on how the link was built) - detect it once on mount and drop
+  // straight into the reset form instead of making the person navigate there.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (token) {
+      setResetToken(token);
+      setMode("reset");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
   const submit = async (event) => {
     event.preventDefault(); setBusy(true); setError("");
     try {
@@ -89,7 +109,130 @@ function AuthScreen({ onAuthenticated }) {
       onAuthenticated(response.data);
     } catch (err) { setError(apiError(err)); } finally { setBusy(false); }
   };
-  return <div className="auth-shell" data-testid="auth-screen"><div className="auth-panel"><div className="brand auth-brand"><img className="brand-icon" src="/brand-icon.png" alt="Coversfolio" /><span><span className="brand-covers">Covers</span><span className="brand-folio">folio</span></span></div><div className="auth-copy"><p className="eyebrow">PRIVATE CLAIM COMPANION</p><h1>{mode === "login" ? "Welcome back." : "Create your household."}</h1><p>Keep your claim file clear, together, and in your hands.</p></div>{mode === "login" || consent ? <GoogleSignInButton onAuthenticated={onAuthenticated} onError={setError} consentGiven={mode === "login" || consent} /> : <p className="empty-hint" data-testid="google-consent-gate" style={{ marginBottom: 8 }}>Check the box below to continue with Google.</p>}{GOOGLE_CLIENT_ID && <div className="auth-divider" data-testid="auth-divider"><span>or with your email</span></div>}<form onSubmit={submit} data-testid="auth-form">{mode === "register" && <label data-testid="name-field">Your name<input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Riya Mehta" /></label>}<label data-testid="email-field">Email address<input required type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></label><label data-testid="password-field">Password<input required minLength="8" type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="8 characters minimum" /></label>{mode === "register" && <label style={{ display: "flex", alignItems: "flex-start", gap: 8, flexDirection: "row", fontSize: 11 }} data-testid="consent-field"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} style={{ width: "auto", marginTop: 2 }} data-testid="consent-checkbox" />I agree to the Privacy Policy and Terms of Service</label>}{error && <div className="auth-error" role="alert" data-testid="auth-error">{error}</div>}<button className="primary-button auth-submit" disabled={busy || (mode === "register" && !consent)} data-testid="auth-submit-button">{busy ? "Checking…" : mode === "login" ? "Sign in securely" : "Create account"}</button></form><button className="auth-switch" data-testid="auth-mode-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "New here? Create a household" : "Already have an account? Sign in"}</button><div className="auth-assurance" data-testid="auth-assurance"><ShieldCheck size={17} /><span><strong>Your files are private</strong><small>Secure session · household access only</small></span></div></div><div className="auth-art"><div><span>01</span><h2>A calmer way<br />through a claim.</h2><p>Organise evidence, understand the next step, and keep every decision yours.</p></div></div></div>;
+
+  const submitForgot = async (event) => {
+    event.preventDefault(); setBusy(true); setError("");
+    try {
+      await client.post("/auth/forgot-password", { email: forgotEmail });
+      setForgotSent(true);
+    } catch (err) { setError(apiError(err)); } finally { setBusy(false); }
+  };
+
+  const submitReset = async (event) => {
+    event.preventDefault(); setError("");
+    if (resetPassword !== resetConfirm) { setError("Passwords don't match"); return; }
+    setBusy(true);
+    try {
+      await client.post("/auth/reset-password", { token: resetToken, new_password: resetPassword });
+      setResetDone(true);
+    } catch (err) { setError(apiError(err)); } finally { setBusy(false); }
+  };
+
+  const heading = mode === "login" ? "Welcome back."
+    : mode === "register" ? "Create your household."
+    : mode === "forgot" ? "Reset your password."
+    : "Set a new password.";
+
+  return (
+    <div className="auth-shell" data-testid="auth-screen">
+      <div className="auth-panel">
+        <div className="brand auth-brand">
+          <img className="brand-icon" src="/brand-icon.png" alt="Coversfolio" />
+          <span><span className="brand-covers">Covers</span><span className="brand-folio">folio</span></span>
+        </div>
+        <div className="auth-copy">
+          <p className="eyebrow">PRIVATE CLAIM COMPANION</p>
+          <h1>{heading}</h1>
+          <p>Keep your claim file clear, together, and in your hands.</p>
+        </div>
+
+        {(mode === "login" || mode === "register") && (
+          <>
+            {mode === "login" || consent ? (
+              <GoogleSignInButton onAuthenticated={onAuthenticated} onError={setError} consentGiven={mode === "login" || consent} />
+            ) : (
+              <p className="empty-hint" data-testid="google-consent-gate" style={{ marginBottom: 8 }}>Check the box below to continue with Google.</p>
+            )}
+            {GOOGLE_CLIENT_ID && <div className="auth-divider" data-testid="auth-divider"><span>or with your email</span></div>}
+            <form onSubmit={submit} data-testid="auth-form">
+              {mode === "register" && (
+                <label data-testid="name-field">Your name<input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Riya Mehta" /></label>
+              )}
+              <label data-testid="email-field">Email address<input required type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></label>
+              <label data-testid="password-field">Password<input required minLength="8" type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="8 characters minimum" /></label>
+              {mode === "login" && (
+                <button
+                  type="button" className="auth-switch" style={{ margin: "-6px 0 4px", textAlign: "left" }}
+                  data-testid="forgot-password-link"
+                  onClick={() => { setMode("forgot"); setError(""); setForgotEmail(form.email); setForgotSent(false); }}
+                >
+                  Forgot password?
+                </button>
+              )}
+              {mode === "register" && (
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, flexDirection: "row", fontSize: 11 }} data-testid="consent-field">
+                  <input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} style={{ width: "auto", marginTop: 2 }} data-testid="consent-checkbox" />
+                  I agree to the Privacy Policy and Terms of Service
+                </label>
+              )}
+              {error && <div className="auth-error" role="alert" data-testid="auth-error">{error}</div>}
+              <button className="primary-button auth-submit" disabled={busy || (mode === "register" && !consent)} data-testid="auth-submit-button">
+                {busy ? "Checking…" : mode === "login" ? "Sign in securely" : "Create account"}
+              </button>
+            </form>
+            <button className="auth-switch" data-testid="auth-mode-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>
+              {mode === "login" ? "New here? Create a household" : "Already have an account? Sign in"}
+            </button>
+          </>
+        )}
+
+        {mode === "forgot" && (
+          forgotSent ? (
+            <div data-testid="forgot-password-sent">
+              <p className="empty-hint" style={{ marginBottom: 16 }}>If an account exists for that email, we've sent password reset instructions. Check your inbox (and spam folder) for a link valid for 30 minutes.</p>
+              <button className="auth-switch" data-testid="back-to-login-link" onClick={() => { setMode("login"); setError(""); }}>Back to sign in</button>
+            </div>
+          ) : (
+            <form onSubmit={submitForgot} data-testid="forgot-password-form">
+              <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 16px" }}>Enter the email on your account and we'll send a link to reset your password.</p>
+              <label data-testid="forgot-email-field">Email address<input required type="email" value={forgotEmail} onChange={e => setForgotEmail(e.target.value)} placeholder="you@example.com" /></label>
+              {error && <div className="auth-error" role="alert" data-testid="auth-error">{error}</div>}
+              <button className="primary-button auth-submit" disabled={busy} data-testid="forgot-password-submit">{busy ? "Sending…" : "Send reset link"}</button>
+              <button type="button" className="auth-switch" data-testid="back-to-login-from-forgot" onClick={() => { setMode("login"); setError(""); }}>Back to sign in</button>
+            </form>
+          )
+        )}
+
+        {mode === "reset" && (
+          resetDone ? (
+            <div data-testid="reset-password-done">
+              <p className="empty-hint" style={{ marginBottom: 16 }}>Your password has been reset. You can now sign in with your new password.</p>
+              <button className="auth-switch" data-testid="back-to-login-after-reset" onClick={() => { setMode("login"); setError(""); }}>Go to sign in</button>
+            </div>
+          ) : (
+            <form onSubmit={submitReset} data-testid="reset-password-form">
+              <label data-testid="reset-password-field">New password<input required minLength="8" type="password" value={resetPassword} onChange={e => setResetPassword(e.target.value)} placeholder="8 characters minimum" /></label>
+              <label data-testid="reset-confirm-field">Confirm new password<input required minLength="8" type="password" value={resetConfirm} onChange={e => setResetConfirm(e.target.value)} placeholder="Type it again" /></label>
+              {error && <div className="auth-error" role="alert" data-testid="auth-error">{error}</div>}
+              <button className="primary-button auth-submit" disabled={busy} data-testid="reset-password-submit">{busy ? "Saving…" : "Set new password"}</button>
+            </form>
+          )
+        )}
+
+        <div className="auth-assurance" data-testid="auth-assurance">
+          <ShieldCheck size={17} />
+          <span><strong>Your files are private</strong><small>Secure session · household access only</small></span>
+        </div>
+      </div>
+      <div className="auth-art">
+        <div>
+          <span>01</span>
+          <h2>A calmer way<br />through a claim.</h2>
+          <p>Organise evidence, understand the next step, and keep every decision yours.</p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function initials(name) {

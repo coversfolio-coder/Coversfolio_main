@@ -508,7 +508,40 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                       {conditionResult.notes && <p style={{ fontSize: 11, color: "var(--muted)" }}>{conditionResult.notes}</p>}
                     </>
                   ) : (
-                    <p style={{ fontSize: 12 }}>{conditionResult.message}</p>
+                    <>
+                      <p style={{ fontSize: 12, margin: conditionResult.named_conditions?.length || conditionResult.named_exclusions?.length ? "0 0 12px" : 0 }}>{conditionResult.message}</p>
+                      {conditionResult.named_conditions?.length > 0 && (
+                        <div style={{ marginBottom: conditionResult.named_exclusions?.length ? 12 : 0 }}>
+                          <p style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", margin: "0 0 6px" }}>Conditions named in this policy</p>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {conditionResult.named_conditions.map((c) => (
+                              <button
+                                key={c} type="button" className="chip chip-neutral" style={{ border: 0, cursor: "pointer" }}
+                                data-testid={`named-condition-${c}`}
+                                onClick={async () => {
+                                  setConditionQuery(c);
+                                  setConditionChecking(true);
+                                  try {
+                                    const res = await client.get(`/policies/${detailsPolicy.id}/check-condition`, { params: { condition: c } });
+                                    setConditionResult(res.data);
+                                  } catch (err) { notify(apiError(err)); } finally { setConditionChecking(false); }
+                                }}
+                              >
+                                {c}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {conditionResult.named_exclusions?.length > 0 && (
+                        <div>
+                          <p style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", margin: "0 0 6px" }}>Exclusions named in this policy</p>
+                          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                            {conditionResult.named_exclusions.map((ex, i) => <li key={i}>{ex}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}

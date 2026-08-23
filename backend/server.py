@@ -4,13 +4,17 @@ load_dotenv()
 
 import logging
 import asyncio
+import difflib
+import hashlib
 import io
 import os
 import re
 import secrets
+import smtplib
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import List
 from urllib.parse import quote
@@ -60,6 +64,25 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 # "Analyze with AI" - this is never triggered automatically on upload.
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest").strip()
+
+# Transactional email (currently just password reset) via any standard SMTP
+# relay - Gmail, SendGrid's SMTP interface, AWS SES's SMTP interface, etc. all
+# work the same way here since this uses Python's stdlib smtplib rather than a
+# vendor-specific API. Unset means email delivery is off: reset links are
+# logged server-side instead of sent, so local/dev setups and fresh deployments
+# never crash just because this hasn't been configured yet.
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or "587")
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
+FROM_EMAIL = os.environ.get("FROM_EMAIL", "").strip() or SMTP_USER
+EMAIL_ENABLED = bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD and FROM_EMAIL)
+# The link a password-reset email points back to. Falls back to the first
+# configured CORS origin (already the frontend's real domain in production)
+# so this doesn't need to be set separately in the common case.
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "").strip().rstrip("/") or next(
+    (o.strip().rstrip("/") for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"), ""
+)
 
 STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", str(ROOT_DIR / "storage")))
 STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -832,6 +855,62 @@ def set_access_cookie_only(response: Response, user: dict):
     response.set_cookie("access_token", access, httponly=True, secure=secure, samesite="lax", max_age=900, path="/")
 
 
+def _password_fingerprint(password_hash: str) -> str:
+    """A short, non-reversible stand-in for the current password hash, embedded
+    in a reset token at issue time. Checking it against the user's *current*
+    password hash at redemption time is what makes each reset link single-use
+    without needing a separate token-tracking collection: once the password
+    actually changes, any older token's embedded fingerprint stops matching."""
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:16]
+
+
+def create_password_reset_token(user: dict) -> str:
+    payload = {
+        "sub": user["id"], "email": user["email"], "type": "password_reset",
+        "pwd_fp": _password_fingerprint(user["password_hash"]),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _send_email_blocking(to_email: str, subject: str, body: str):
+    """Actual SMTP send - blocking, so callers must run this via
+    asyncio.to_thread rather than calling it directly from an async route
+    (same reasoning as the Gemini call: smtplib's socket I/O would otherwise
+    freeze the whole server for every user until the send completes)."""
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = FROM_EMAIL
+    msg["To"] = to_email
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+        smtp.starttls()
+        smtp.login(SMTP_USER, SMTP_PASSWORD)
+        smtp.send_message(msg)
+
+
+async def send_password_reset_email(to_email: str, reset_link: str):
+    subject = "Reset your Coversfolio password"
+    body = (
+        f"We received a request to reset your Coversfolio password.\n\n"
+        f"Reset it here (valid for 30 minutes): {reset_link}\n\n"
+        f"If you didn't request this, you can safely ignore this email - your password won't change unless you click the link above and set a new one."
+    )
+    if not EMAIL_ENABLED:
+        # No SMTP configured yet - log the link server-side instead of silently
+        # failing, so this is still testable/debuggable before email delivery
+        # is wired up in the deployment environment.
+        logger.warning("EMAIL_ENABLED is false - password reset link for %s (not sent): %s", to_email, reset_link)
+        return
+    try:
+        await asyncio.to_thread(_send_email_blocking, to_email, subject, body)
+    except Exception as exc:
+        # Never let an email-delivery failure reveal account existence or leak
+        # via a 500 to the person requesting the reset - log it for the
+        # household/site operator to notice and fix, but the API response
+        # stays the same generic message either way.
+        logger.error("Failed to send password reset email to %s: %s", to_email, exc)
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Coversfolio API"}
@@ -900,6 +979,51 @@ async def login(input: AuthInput, request: Request, response: Response):
     await db.login_attempts.delete_one({"identifier": identifier})
     set_session(response, user)
     return public_user(user)
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(input: ForgotPasswordInput, request: Request):
+    # Rate-limited per IP, not per email - rate-limiting per email would let
+    # someone probe which addresses have accounts by watching for a
+    # rate-limit response instead of the generic success message below.
+    await enforce_rate_limit(request, "forgot_password", limit=5, window=timedelta(hours=1))
+    email = str(input.email).lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    # Same response whether or not the account exists, and whether or not it's
+    # a Google-only account with no password to reset - telling the person
+    # either way would let this endpoint be used to check who has an account.
+    generic_response = {"message": "If an account exists for that email, we've sent password reset instructions."}
+    if not user or user.get("status") == "revoked" or not user.get("password_hash"):
+        return generic_response
+    token = create_password_reset_token(user)
+    reset_link = f"{FRONTEND_URL}/reset-password?token={token}" if FRONTEND_URL else f"/reset-password?token={token}"
+    await send_password_reset_email(user["email"], reset_link)
+    await audit(user, "password_reset_requested", "Requested a password reset")
+    return generic_response
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(input: ResetPasswordInput):
+    try:
+        payload = jwt.decode(input.token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "password_reset":
+            raise HTTPException(status_code=400, detail="This reset link is invalid")
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired - request a new one") from exc
+
+    user = await db.users.find_one({"id": payload.get("sub")}, {"_id": 0})
+    if not user or user.get("status") == "revoked" or not user.get("password_hash"):
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired - request a new one")
+    if payload.get("pwd_fp") != _password_fingerprint(user["password_hash"]):
+        # The password already changed since this link was issued - either it
+        # was already used once, or a newer reset link superseded it. Either
+        # way, this exact link doesn't get a second use.
+        raise HTTPException(status_code=400, detail="This reset link has already been used - request a new one if you still need to reset your password")
+
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": hash_password(input.new_password)}})
+    await db.login_attempts.delete_one({"identifier": user["email"]})
+    await audit(user, "password_reset_completed", "Password reset via emailed link")
+    return {"message": "Your password has been reset. You can now log in with your new password."}
 
 
 @api_router.post("/auth/refresh")
@@ -1081,6 +1205,7 @@ async def get_dashboard(user: dict = Depends(current_user)):
         claim["packet_status"] = packet_status
         claim["documents_attached"] = attached
         claim["documents_total"] = total_sections
+        claim["progress"] = compute_claim_progress(claim, attached, total_sections)
         if packet_status != "Ready to submit" and claim.get("status") in ("in_progress", "reopened", "appealed"):
             packets_in_progress += 1
     for claim in full_claims:
@@ -1534,6 +1659,59 @@ async def reverse_geocode(lat: float, lng: float, user: dict = Depends(current_u
     return {"city": city, "state": address.get("state"), "postcode": address.get("postcode")}
 
 
+# A non-professional person searching "kidney stone" has no reason to know an
+# insurer's document calls it "renal calculi" or "nephrolithiasis" - a plain
+# substring match would silently miss it and imply "not covered" when it might
+# well be. This isn't an exhaustive medical thesaurus, just the common
+# lay-term/medical-term mismatches that come up repeatedly in Indian health
+# insurance documents. Each key is one canonical way the condition might
+# actually be named in a policy; the list is other names/spellings a person
+# might search for instead.
+CONDITION_SYNONYMS = {
+    "kidney stone": ["renal calculi", "nephrolithiasis", "kidney stones", "renal stone", "urolithiasis"],
+    "gallstones": ["cholelithiasis", "gall stones", "gallbladder stones", "gall bladder stone"],
+    "piles": ["hemorrhoids", "haemorrhoids"],
+    "appendix": ["appendicitis"],
+    "hernia": ["herniorrhaphy", "hernioplasty"],
+    "c-section": ["cesarean", "caesarean", "lscs", "c section", "cesarean section"],
+    "slip disc": ["slipped disc", "prolapsed intervertebral disc", "pivd", "disc prolapse"],
+    "cataract": ["cataract surgery", "phacoemulsification"],
+    "joint replacement": ["knee replacement", "hip replacement", "arthroplasty", "total knee replacement", "total hip replacement"],
+    "sugar": ["diabetes", "diabetes mellitus", "high blood sugar"],
+    "bp": ["blood pressure", "hypertension", "high blood pressure"],
+    "heart attack": ["myocardial infarction", "mi", "cardiac arrest"],
+    "piles surgery": ["hemorrhoidectomy"],
+    "tonsils": ["tonsillitis", "tonsillectomy"],
+    "hydrocele": ["hydrocele repair", "hydrocelectomy"],
+    "fistula": ["anal fistula", "fistulectomy"],
+    "varicose veins": ["varicose vein", "venous insufficiency"],
+    "thyroid": ["hypothyroidism", "hyperthyroidism", "goitre", "goiter"],
+    "sinus": ["sinusitis"],
+    "gastric": ["gastritis", "peptic ulcer", "acidity"],
+}
+
+
+def _expand_condition_query(query: str) -> set[str]:
+    """Given what a person typed, returns every phrasing worth trying against
+    the policy's extracted condition list: the original query, and any
+    known synonym in either direction (lay term -> medical term, or the
+    reverse, since a person might type either one)."""
+    variants = {query}
+    for canonical, synonyms in CONDITION_SYNONYMS.items():
+        names = [canonical] + synonyms
+        if any(query == n or query in n or n in query for n in names):
+            variants.update(names)
+    return variants
+
+
+def _fuzzy_match_condition(query: str, item_names: list[str], cutoff: float = 0.72) -> str | None:
+    """Catches near-misses a plain substring check would miss - typos,
+    singular/plural, minor spelling variants ('nephrolithiasis' vs
+    'nephrolithiais') - without needing an exact or synonym-listed match."""
+    matches = difflib.get_close_matches(query, item_names, n=1, cutoff=cutoff)
+    return matches[0] if matches else None
+
+
 def check_condition_against_policy(policy: dict, condition: str) -> dict:
     """Shared logic for matching a condition/diagnosis against a policy's
     AI-extracted waiting periods - used both by the manual 'ask about a
@@ -1557,16 +1735,31 @@ def check_condition_against_policy(policy: dict, condition: str) -> dict:
             "waiting_period_months": maternity.get("waiting_period_months"), "notes": maternity.get("notes"),
         })
 
-    for item in ai_insights.get("waiting_periods", []):
+    waiting_periods = ai_insights.get("waiting_periods", [])
+    query_variants = _expand_condition_query(query)
+
+    for item in waiting_periods:
         item_name = item.get("condition", "").lower()
-        if query in item_name or item_name in query:
+        if any(v in item_name or item_name in v for v in query_variants):
             candidates.append(item)
 
+    if not candidates and waiting_periods:
+        item_names = [item.get("condition", "") for item in waiting_periods]
+        fuzzy = _fuzzy_match_condition(condition.strip(), item_names)
+        if fuzzy:
+            candidates.append(next(item for item in waiting_periods if item.get("condition", "") == fuzzy))
+
     if not candidates:
+        # Rather than leaving the person to guess a better search term, hand
+        # back everything the policy actually names - so they can recognize
+        # their own condition even under a term they wouldn't have thought to
+        # type themselves.
         return {
             "matched": False,
-            "message": f"'{condition}' isn't specifically named in what we extracted from this policy. That doesn't necessarily mean it's excluded - check the document's full exclusions list, or ask your insurer directly before assuming either way.",
+            "message": f"'{condition}' isn't specifically named in what we extracted from this policy - but that might just be a wording difference, not an actual exclusion. Check the lists below for anything that sounds like your situation, or ask your insurer directly before assuming either way.",
             "pre_existing_disease_waiting_months": ai_insights.get("pre_existing_disease_waiting_months"),
+            "named_conditions": [item.get("condition") for item in waiting_periods if item.get("condition")],
+            "named_exclusions": ai_insights.get("key_exclusions", []),
         }
 
     best = candidates[0]
@@ -1943,13 +2136,14 @@ def bucket_bill_date(bill_date: str | None, admission_date: str | None, discharg
 
 @api_router.get("/claims/{claim_id}/claim-form")
 async def generate_claim_form(claim_id: str, user: dict = Depends(current_user)):
-    """Generates the Part A equivalent every Indian insurer's reimbursement
-    claim form requires - policy and insured-person details, hospitalization
-    details, and bills bucketed and totaled into pre/during/post-hospitalization
-    exactly like the real form does. This fills in what the app already knows;
-    it does not replace the insurer's own form (which needs your signature) or
-    the hospital-filled Part B (which needs theirs) - it's the summary that
-    makes filling either one out from scratch unnecessary."""
+    """Generates a fill-in reference for the insured person's own claim form -
+    for Reimbursement, the Part A equivalent (policy/patient/hospitalization
+    details plus bills bucketed and totaled); for Cashless, the same
+    policy/patient/hospitalization sections a hospital's pre-authorization desk
+    typically asks for, without any expense totals since the insurer settles
+    directly with the hospital. It does not replace the insurer's own form
+    (needs your signature) or the hospital-filled Part B (needs theirs) - it's
+    the summary that makes filling either one out from scratch unnecessary."""
     claim = await _load_claim(claim_id, user)
     household = await household_for(user)
 
@@ -2051,7 +2245,16 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
                 {"label": "System of medicine", "value": claim.get("system_of_medicine")},
             ],
         },
-        {
+    ]
+
+    # Sections E (treatment expenses) and F (bills enclosed) only apply to
+    # Reimbursement - a Cashless claim settles directly between the insurer and
+    # the hospital, so there's no expense total or bill list for the insured
+    # person to fill in themselves. Sections A-D above are what a hospital's own
+    # pre-authorization desk typically asks for regardless of claim type, so
+    # those stay useful either way.
+    if claim["type"] == "Reimbursement":
+        cheat_sheet.append({
             "section": "E", "title": "Details of claim - treatment expenses",
             "fields": [
                 {"label": "Pre-hospitalization expenses (Rs.)", "value": totals["pre_hospitalization"]},
@@ -2060,9 +2263,8 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
                 {"label": "Total (Rs.)", "value": grand_total},
             ],
             "note": "Ambulance charges, health-checkup cost, domiciliary hospitalization, and lump-sum/cash benefits aren't calculated automatically - add those on the paper form only if they apply to your claim.",
-        },
-        {"section": "F", "title": "Details of bills enclosed", "bills": bill_rows},
-    ]
+        })
+        cheat_sheet.append({"section": "F", "title": "Details of bills enclosed", "bills": bill_rows})
 
     return {
         "household_name": household["name"],
@@ -2365,6 +2567,19 @@ def _require_writer(user: dict):
         raise HTTPException(status_code=403, detail="Read-only agents cannot edit claims")
 
 
+def compute_claim_progress(claim: dict, attached: int, total_sections: int) -> int:
+    """Progress now reflects how complete the claim's document packet actually
+    is, not a manually-picked stage - the Timeline tab that used to drive this
+    was removed (it fit a settlement-tracking model this app deliberately
+    doesn't do). Terminal outcomes always read 100 regardless of packet state,
+    since at that point there's nothing left to compile."""
+    if claim.get("status") in ("settled", "rejected"):
+        return 100
+    if total_sections == 0:
+        return 8
+    return round((attached / total_sections) * 100)
+
+
 async def _load_claim(claim_id: str, user: dict) -> dict:
     claim = await db.claims.find_one({"id": claim_id, "household_id": user["household_id"]}, {"_id": 0})
     if not claim:
@@ -2375,6 +2590,9 @@ async def _load_claim(claim_id: str, user: dict) -> dict:
 @api_router.get("/claims/{claim_id}")
 async def get_claim(claim_id: str, user: dict = Depends(current_user)):
     claim = await _load_claim(claim_id, user)
+    packet = await get_claim_document_packet(claim_id, user)
+    attached = sum(1 for s in packet["sections"] if s["status"] == "attached")
+    claim["progress"] = compute_claim_progress(claim, attached, len(packet["sections"]))
     return _public_claim(claim)
 
 
