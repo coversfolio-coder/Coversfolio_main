@@ -109,9 +109,16 @@ def get_s3_client():
     global _s3_client
     if _s3_client is None:
         import boto3
+        from botocore.config import Config
         _s3_client = boto3.client(
             "s3", endpoint_url=S3_ENDPOINT_URL, region_name=S3_REGION or None,
             aws_access_key_id=S3_ACCESS_KEY, aws_secret_access_key=S3_SECRET_KEY,
+            # boto3/botocore >=1.36 send an x-amz-sdk-checksum-algorithm header on
+            # every S3 request by default. Real AWS S3 understands it; DigitalOcean
+            # Spaces (and other S3-compatible services) don't, and reject the
+            # request with a generic "InvalidArgument" that has nothing to do with
+            # credentials - this restores the older, universally-compatible behavior.
+            config=Config(request_checksum_calculation="when_required", response_checksum_validation="when_required"),
         )
     return _s3_client
 
