@@ -294,6 +294,11 @@ function App() {
   const [showNew, setShowNew] = useState(false);
   const [newClaimPolicyId, setNewClaimPolicyId] = useState("");
   const [toast, setToast] = useState(null); // { message, isError } | null
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
   const [members, setMembers] = useState({ members: [], invites: [] });
   const [activity, setActivity] = useState([]);
@@ -346,6 +351,39 @@ function App() {
     } catch (err) { notify(apiError(err), true); }
   };
   const signOut = async () => { try { await client.post(`/auth/logout`, {}); } catch (err) {} setUser(false); setData(fallback); setOpenClaimId(null); setShowMembers(false); };
+
+  // Real search: debounced call to /api/search, replacing what used to be a
+  // button that just showed a toast with the typed-in text and did nothing else.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const q = searchQuery.trim();
+    if (q.length < 2) { setSearchResults(null); setSearching(false); return; }
+    setSearching(true);
+    const timeout = setTimeout(() => {
+      client.get("/search", { params: { q } })
+        .then((r) => setSearchResults(r.data))
+        .catch(() => setSearchResults(null))
+        .finally(() => setSearching(false));
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [searchQuery, searchOpen]);
+
+  const closeSearch = () => { setSearchOpen(false); setSearchQuery(""); setSearchResults(null); };
+  const goToSearchResult = (type, item) => {
+    closeSearch();
+    if (type === "claim") openClaim(item.id);
+    else if (type === "policy") navigate("policies");
+    else if (type === "document") navigate("documents");
+  };
+
+  // Real notifications: reuses the same attention data already shown on the
+  // dashboard, but now clicking one actually takes you to the claim or policy
+  // involved, instead of just repeating a count in a toast.
+  const goToAttentionItem = (item) => {
+    setNotifOpen(false);
+    if (item.target_type === "claim" && item.target_id) openClaim(item.target_id);
+    else if (item.target_type === "policy") navigate("policies");
+  };
   useEffect(() => {
     client.get(`/auth/me`).then(r => setUser(r.data)).catch(() => setUser(false)).finally(() => setAuthChecking(false));
   }, []);
@@ -367,7 +405,90 @@ function App() {
       <div className="sidebar-bottom"><button className="nav-item" data-testid="nav-support" onClick={() => notify("Support centre is ready for your questions")}><LifeBuoy size={18} /><span>Support centre</span></button><div className="privacy-note" data-testid="privacy-note"><ShieldCheck size={17} /><span><strong>Your files stay private</strong><small>Encrypted and only shared by you</small></span></div><button className="profile" data-testid="sidebar-profile" onClick={() => document.querySelector('[data-testid="account-menu-trigger"]')?.click()}><Avatar user={user} /><span><strong>{user.name}</strong><small>{user.role === "owner" ? "Household owner" : user.role === "agent" ? "Read-only agent" : "Household member"}</small></span><Menu size={16} /></button></div>
     </aside>
     <main className="main-content">
-      <header className="topbar"><div className="crumbs" data-testid="page-breadcrumb"><span>My household</span><ChevronRight size={14} /><strong>{navItems.find(n => n.id === active)?.label || "Claim workspace"}</strong></div><div className="top-actions"><button className="icon-button" aria-label="Search" data-testid="search-button" onClick={() => notify("Search across your claim file")}><Search size={19} /></button><button className="icon-button notification" aria-label="Notifications" data-testid="notifications-button" onClick={() => notify(data.attention.length > 0 ? `You have ${data.attention.length} item${data.attention.length === 1 ? "" : "s"} needing attention` : "You're all caught up")}><Bell size={19} /><i /></button><AccountMenu user={user} onManageAccess={openMembers} onSignOut={signOut} onSupport={() => notify("Support centre is ready for your questions")} /></div></header>
+      <header className="topbar">
+        <div className="crumbs" data-testid="page-breadcrumb"><span>My household</span><ChevronRight size={14} /><strong>{navItems.find(n => n.id === active)?.label || "Claim workspace"}</strong></div>
+        <div className="top-actions">
+          <div style={{ position: "relative" }}>
+            <button className="icon-button" aria-label="Search" data-testid="search-button" onClick={() => { setSearchOpen((v) => !v); setNotifOpen(false); }}><Search size={19} /></button>
+            {searchOpen && (
+              <>
+                <div className="dropdown-backdrop" onClick={closeSearch} />
+                <div className="search-dropdown" data-testid="search-dropdown">
+                  <input
+                    autoFocus type="text" placeholder="Search policies, claims, documents…"
+                    value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                    data-testid="search-input"
+                  />
+                  {searchQuery.trim().length > 0 && searchQuery.trim().length < 2 && <p className="empty-hint" style={{ padding: "10px 14px", margin: 0 }}>Keep typing…</p>}
+                  {searching && <p className="empty-hint" style={{ padding: "10px 14px", margin: 0 }}>Searching…</p>}
+                  {searchResults && !searching && (
+                    (searchResults.policies.length + searchResults.claims.length + searchResults.documents.length === 0) ? (
+                      <p className="empty-hint" style={{ padding: "10px 14px", margin: 0 }}>No matches for "{searchQuery}"</p>
+                    ) : (
+                      <div data-testid="search-results">
+                        {searchResults.policies.length > 0 && (
+                          <div className="search-group">
+                            <p className="search-group-label">Policies</p>
+                            {searchResults.policies.map((p) => (
+                              <button key={p.id} className="search-result-row" onClick={() => goToSearchResult("policy", p)} data-testid={`search-result-policy-${p.id}`}>
+                                <BookOpen size={14} /><span><strong>{p.insurer_name}</strong><small>{p.policy_number} · {p.policy_type}</small></span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {searchResults.claims.length > 0 && (
+                          <div className="search-group">
+                            <p className="search-group-label">Claims</p>
+                            {searchResults.claims.map((c) => (
+                              <button key={c.id} className="search-result-row" onClick={() => goToSearchResult("claim", c)} data-testid={`search-result-claim-${c.id}`}>
+                                <FileText size={14} /><span><strong>{c.title}</strong><small>{c.type} · {c.status}</small></span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {searchResults.documents.length > 0 && (
+                          <div className="search-group">
+                            <p className="search-group-label">Documents</p>
+                            {searchResults.documents.map((d) => (
+                              <button key={d.id} className="search-result-row" onClick={() => goToSearchResult("document", d)} data-testid={`search-result-document-${d.id}`}>
+                                <ClipboardCheck size={14} /><span><strong>{d.filename}</strong><small>{d.category}</small></span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div style={{ position: "relative" }}>
+            <button className="icon-button notification" aria-label="Notifications" data-testid="notifications-button" onClick={() => { setNotifOpen((v) => !v); setSearchOpen(false); }}>
+              <Bell size={19} />{data.attention.length > 0 && <i />}
+            </button>
+            {notifOpen && (
+              <>
+                <div className="dropdown-backdrop" onClick={() => setNotifOpen(false)} />
+                <div className="notif-dropdown" data-testid="notifications-dropdown">
+                  <p className="search-group-label" style={{ padding: "12px 14px 6px" }}>Notifications</p>
+                  {data.attention.length === 0 ? (
+                    <p className="empty-hint" style={{ padding: "0 14px 14px", margin: 0 }}>You're all caught up.</p>
+                  ) : data.attention.map((item, i) => (
+                    <button key={i} className="search-result-row" data-testid={`notif-item-${i}`} onClick={() => goToAttentionItem(item)}>
+                      <span className={`attn-row-dot ${item.tone === "red" ? "crit" : "warn"}`} />
+                      <span><strong>{item.label}</strong><small>{item.detail}</small></span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          <AccountMenu user={user} onManageAccess={openMembers} onSignOut={signOut} onSupport={() => notify("Support centre is ready for your questions")} />
+        </div>
+      </header>
       <div className="content-wrap">
         {active === "workspace" && <>
         <section className="welcome-row"><div><p className="eyebrow" data-testid="workspace-eyebrow">{new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).toUpperCase()}</p><h1 data-testid="workspace-title">Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, {user.name?.split(" ")[0] || "there"}<span className="title-accent">.</span></h1><p className="lede" data-testid="workspace-subtitle">One clear view of everything moving your claim forward.</p></div><div style={{ display: "flex", gap: 10 }}><button className="outline-button" data-testid="quick-upload-document-button" onClick={() => navigate("documents")}><Upload size={15} /> Upload document</button><button className="primary-button" data-testid="quick-add-policy-button" onClick={() => navigate("policies")}><Plus size={18} /> Add policy</button></div></section>
@@ -405,7 +526,7 @@ function App() {
           <div className="dash-panel" data-testid="attention-panel">
             <p className="dash-panel-title">Needs attention</p>
             {data.attention.length === 0 ? <p className="empty-hint">Nothing needs your attention right now.</p> : data.attention.map((item, i) => (
-              <button className="attn-row" key={item.label} data-testid={`attention-item-${i}`} onClick={() => notify(`${item.label} selected`)} style={{ width: "100%", border: 0, background: "transparent", cursor: "pointer", textAlign: "left" }}>
+              <button className="attn-row" key={item.label} data-testid={`attention-item-${i}`} onClick={() => goToAttentionItem(item)} style={{ width: "100%", border: 0, background: "transparent", cursor: "pointer", textAlign: "left" }}>
                 <span className={`attn-row-dot ${item.tone === "red" ? "crit" : "warn"}`} />
                 <div className="attn-row-body"><div className="attn-row-title">{item.label}</div><div className="attn-row-meta">{item.detail}</div></div>
               </button>

@@ -1147,6 +1147,31 @@ async def audit(user: dict, action: str, detail: str, actor_email: str | None = 
     await db.audit_events.insert_one({"id": str(uuid.uuid4()), "household_id": user["household_id"], "actor_id": user["id"], "actor_name": user.get("name", "Household member"), "actor_email": actor_email or user.get("email"), "action": action, "detail": detail, "created_at": datetime.now(timezone.utc).isoformat()})
 
 
+@api_router.get("/search")
+async def search(q: str, user: dict = Depends(current_user)):
+    """Backs the topbar search - previously that button was pure decoration
+    (it just showed a toast with the typed-in prompt, no actual search ever
+    ran). Searches policies, claims, and documents by the fields a person
+    would actually recognize their own data by."""
+    query = q.strip()
+    if len(query) < 2:
+        return {"policies": [], "claims": [], "documents": []}
+    regex = {"$regex": re.escape(query), "$options": "i"}
+    policies = await db.policies.find(
+        {"household_id": user["household_id"], "$or": [{"insurer_name": regex}, {"policy_number": regex}, {"policy_type": regex}]},
+        {"_id": 0, "id": 1, "insurer_name": 1, "policy_number": 1, "policy_type": 1},
+    ).to_list(8)
+    claims = await db.claims.find(
+        {"household_id": user["household_id"], "$or": [{"title": regex}, {"type": regex}]},
+        {"_id": 0, "id": 1, "title": 1, "type": 1, "status": 1},
+    ).to_list(8)
+    documents = await db.documents.find(
+        {"household_id": user["household_id"], "filename": regex},
+        {"_id": 0, "id": 1, "filename": 1, "category": 1},
+    ).to_list(8)
+    return {"policies": policies, "claims": claims, "documents": documents}
+
+
 @api_router.get("/dashboard")
 async def get_dashboard(user: dict = Depends(current_user)):
     await audit(user, "workspace_viewed", "Opened the claim workspace")
@@ -1162,10 +1187,10 @@ async def get_dashboard(user: dict = Depends(current_user)):
             continue
         for query in claim.get("queries", []):
             if query.get("status") == "open":
-                attention.append({"label": f"Insurer query on {claim['id']}", "detail": query.get("question", "")[:80] or "Awaiting your response", "tone": "red"})
+                attention.append({"label": f"Insurer query on {claim['id']}", "detail": query.get("question", "")[:80] or "Awaiting your response", "tone": "red", "target_type": "claim", "target_id": claim["id"]})
         pending_items = [c["label"] for c in claim.get("checklist", []) if not c.get("done")]
         if pending_items:
-            attention.append({"label": f"{len(pending_items)} document{'s' if len(pending_items) != 1 else ''} pending on {claim['id']}", "detail": pending_items[0], "tone": "amber"})
+            attention.append({"label": f"{len(pending_items)} document{'s' if len(pending_items) != 1 else ''} pending on {claim['id']}", "detail": pending_items[0], "tone": "amber", "target_type": "claim", "target_id": claim["id"]})
 
         for event in claim.get("sla_events", []):
             if event.get("resolved_at"):
@@ -1180,7 +1205,7 @@ async def get_dashboard(user: dict = Depends(current_user)):
                 hours_over = int(overdue.total_seconds() // 3600)
                 mins_over = int((overdue.total_seconds() % 3600) // 60)
                 overdue_text = f"{hours_over}h {mins_over}m overdue" if hours_over else f"{mins_over}m overdue"
-                attention.append({"label": f"SLA missed: {event['label']} on {claim['id']}", "detail": overdue_text, "tone": "red"})
+                attention.append({"label": f"SLA missed: {event['label']} on {claim['id']}", "detail": overdue_text, "tone": "red", "target_type": "claim", "target_id": claim["id"]})
             else:
                 deadlines.append({
                     "date": deadline_at.strftime("%d"), "month": deadline_at.strftime("%b").upper(),
@@ -1201,11 +1226,11 @@ async def get_dashboard(user: dict = Depends(current_user)):
             "remaining_sum_insured": utilization["remaining"], "sum_insured": policy.get("sum_insured", 0),
         })
         if status_info["status"] == "expired":
-            attention.append({"label": f"{policy['insurer_name']} policy has expired", "detail": status_info["days_label"], "tone": "red"})
+            attention.append({"label": f"{policy['insurer_name']} policy has expired", "detail": status_info["days_label"], "tone": "red", "target_type": "policy", "target_id": policy["id"]})
         elif status_info["status"] == "grace_period":
-            attention.append({"label": f"{policy['insurer_name']} policy is in its grace period", "detail": status_info["days_label"], "tone": "red"})
+            attention.append({"label": f"{policy['insurer_name']} policy is in its grace period", "detail": status_info["days_label"], "tone": "red", "target_type": "policy", "target_id": policy["id"]})
         elif status_info["status"] == "active" and status_info["days_remaining"] is not None and status_info["days_remaining"] <= 30:
-            attention.append({"label": f"{policy['insurer_name']} policy renews soon", "detail": status_info["days_label"], "tone": "amber"})
+            attention.append({"label": f"{policy['insurer_name']} policy renews soon", "detail": status_info["days_label"], "tone": "amber", "target_type": "policy", "target_id": policy["id"]})
 
     deadlines.sort(key=lambda d: d["_sort"])
     deadlines = [{k: v for k, v in d.items() if k != "_sort"} for d in deadlines[:5]]
