@@ -282,9 +282,12 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
 
   return (
     <section className="page-section" data-testid="policies-page">
-      <div className="section-heading">
+      <div className="page-accent-header">
         <div><p className="eyebrow">COVERAGE</p><h2 data-testid="policies-heading">Policies &amp; people</h2></div>
-        {canEdit && <button className="primary-button" data-testid="add-policy-button" onClick={() => { setForm(emptyForm); setTypeTouched(false); setScannedFrom(null); setAiInsights(null); setShowForm(true); }}><Plus size={16} /> Add policy</button>}
+        <div className="page-accent-header-actions">
+          <span className="page-accent-stat">Tracked<strong>{policies.length}</strong></span>
+          {canEdit && <button className="primary-button" data-testid="add-policy-button" onClick={() => { setForm(emptyForm); setTypeTouched(false); setScannedFrom(null); setAiInsights(null); setShowForm(true); }}><Plus size={16} /> Add policy</button>}
+        </div>
       </div>
 
       {policies.length === 0 ? (

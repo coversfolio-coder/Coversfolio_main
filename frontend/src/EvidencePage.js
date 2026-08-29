@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import client, { API, apiError } from "@/api";
-import { Camera, Download, FileText, Home, Plus, Trash2, Upload, X } from "lucide-react";
+import { Camera, Download, FileText, Plus, Trash2, Upload, X } from "lucide-react";
 
 const emptyForm = { category: "", item_name: "", description: "", purchase_date: "", value: "" };
 
@@ -85,17 +85,18 @@ export default function EvidencePage({ canEdit, notify }) {
 
   return (
     <section className="page-section" data-testid="evidence-page">
-      <div className="section-heading">
+      <div className="page-accent-header">
         <div><p className="eyebrow">HOME INVENTORY</p><h2 data-testid="evidence-heading">Evidence vault</h2></div>
-        {canEdit && <button className="primary-button" data-testid="add-evidence-button" onClick={() => setShowForm(true)}><Plus size={16} /> Add item</button>}
-      </div>
-
-      {items.length > 0 && (
-        <div className="attention-strip" data-testid="evidence-total-strip">
-          <div className="attention-icon"><Home size={20} /></div>
-          <div><strong>{items.length} items catalogued</strong><span>Estimated total value: ₹{totalValue.toLocaleString("en-IN")}</span></div>
+        <div className="page-accent-header-actions">
+          {items.length > 0 && (
+            <>
+              <span className="page-accent-stat" data-testid="evidence-total-strip">Catalogued<strong>{items.length}</strong></span>
+              <span className="page-accent-stat">Est. value<strong>&#8377;{totalValue.toLocaleString("en-IN")}</strong></span>
+            </>
+          )}
+          {canEdit && <button className="primary-button" data-testid="add-evidence-button" onClick={() => setShowForm(true)}><Plus size={16} /> Add item</button>}
         </div>
-      )}
+      </div>
 
       {items.length === 0 ? (
         <div className="empty-hint" data-testid="evidence-empty">No inventory items yet. Add belongings with photos and receipts to support a future claim.</div>

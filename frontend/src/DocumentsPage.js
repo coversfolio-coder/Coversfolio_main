@@ -115,16 +115,19 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
 
   return (
     <section className="page-section" data-testid="documents-page">
-      <div className="section-heading">
+      <div className="page-accent-header">
         <div><p className="eyebrow">SECURE STORAGE</p><h2 data-testid="documents-heading">Documents</h2></div>
-        {canEdit && (
-          <>
-            <input ref={inputRef} type="file" hidden onChange={onFilePicked} data-testid="document-file-input" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.doc,.docx" />
-            <button className="primary-button" data-testid="upload-document-page-button" onClick={() => inputRef.current?.click()}>
-              <Upload size={16} /> Upload document
-            </button>
-          </>
-        )}
+        <div className="page-accent-header-actions">
+          {documents !== null && <span className="page-accent-stat">Stored<strong>{documents.length}</strong></span>}
+          {canEdit && (
+            <>
+              <input ref={inputRef} type="file" hidden onChange={onFilePicked} data-testid="document-file-input" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.doc,.docx" />
+              <button className="primary-button" data-testid="upload-document-page-button" onClick={() => inputRef.current?.click()}>
+                <Upload size={16} /> Upload document
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {policies.length > 0 && (

@@ -326,6 +326,11 @@ function App() {
   const [searchResults, setSearchResults] = useState(null);
   const [searching, setSearching] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(id);
+  }, []);
   const [showMembers, setShowMembers] = useState(false);
   const [members, setMembers] = useState({ members: [], invites: [] });
   const [activity, setActivity] = useState([]);
@@ -518,13 +523,45 @@ function App() {
       </header>
       <div className="content-wrap">
         {active === "workspace" && <>
-        <section className="welcome-row"><div><p className="eyebrow" data-testid="workspace-eyebrow">{new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).toUpperCase()}</p><h1 data-testid="workspace-title">Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, {user.name?.split(" ")[0] || "there"}<span className="title-accent">.</span></h1><p className="lede" data-testid="workspace-subtitle">One clear view of everything moving your claim forward.</p></div><div style={{ display: "flex", gap: 10 }}><button className="outline-button" data-testid="quick-upload-document-button" onClick={() => navigate("documents")}><Upload size={15} /> Upload document</button><button className="primary-button" data-testid="quick-add-policy-button" onClick={() => navigate("policies")}><Plus size={18} /> Add policy</button></div></section>
+        <section className="hero-panel" data-testid="dashboard-hero">
+          <div className="hero-top-row">
+            {(() => {
+              const openCount = data.attention.length;
+              const severe = data.attention.some((a) => a.tone === "red");
+              return (
+                <span className={`hero-status-pill ${openCount === 0 ? "ok" : severe ? "crit" : "warn"}`} data-testid="hero-status-pill">
+                  <i />{openCount === 0 ? "All caught up" : `${openCount} item${openCount === 1 ? "" : "s"} need${openCount === 1 ? "s" : ""} attention`}
+                </span>
+              );
+            })()}
+            <span className="hero-clock" data-testid="hero-clock">{now.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" }).toUpperCase()} · {now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</span>
+          </div>
 
-        {data.kpis && <div className="kpi-grid" data-testid="kpi-grid">
-          <div className="kpi" data-testid="kpi-active-policies"><div className="k-label">Active policies</div><div className="k-value">{data.kpis.active_policies}</div><div className="k-sub">{data.kpis.insurer_count} insurer{data.kpis.insurer_count === 1 ? "" : "s"}</div></div>
-          <div className="kpi" data-testid="kpi-sum-insured"><div className="k-label">Total sum insured</div><div className="k-value accent">{formatINR(data.kpis.total_sum_insured)}</div><div className="k-sub">across household</div></div>
-          <div className="kpi" data-testid="kpi-packets-in-progress"><div className="k-label">Claim packets in progress</div><div className="k-value warn">{data.kpis.packets_in_progress}</div><div className="k-sub">not yet ready to submit</div></div>
-        </div>}
+          <h1 data-testid="workspace-title">Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, {user.name?.split(" ")[0] || "there"}<span className="title-accent">.</span></h1>
+          <p className="hero-lede" data-testid="workspace-subtitle">One clear view of everything moving your claim forward.</p>
+
+          <div className="hero-actions">
+            <button className="hero-button-outline" data-testid="quick-upload-document-button" onClick={() => navigate("documents")}><Upload size={15} /> Upload document</button>
+            <button className="primary-button" data-testid="quick-add-policy-button" onClick={() => navigate("policies")}><Plus size={18} /> Add policy</button>
+          </div>
+
+          {data.kpis && (
+            <div className="hero-stats" data-testid="kpi-grid">
+              <div className="hero-stat" data-testid="kpi-sum-insured">
+                <strong>{formatINR(data.kpis.total_sum_insured)}</strong>
+                <span>Total sum insured</span>
+              </div>
+              <div className="hero-stat" data-testid="kpi-active-policies">
+                <strong>{data.kpis.active_policies}</strong>
+                <span>Polic{data.kpis.active_policies === 1 ? "y" : "ies"} tracked · {data.kpis.insurer_count} insurer{data.kpis.insurer_count === 1 ? "" : "s"}</span>
+              </div>
+              <div className="hero-stat" data-testid="kpi-packets-in-progress">
+                <strong>{data.kpis.packets_in_progress}</strong>
+                <span>Claim packet{data.kpis.packets_in_progress === 1 ? "" : "s"} in progress</span>
+              </div>
+            </div>
+          )}
+        </section>
 
         {data.onboarding && !data.onboarding.all_done && !data.onboarding.dismissed && (
           <section className="onboarding-card" data-testid="onboarding-checklist">
