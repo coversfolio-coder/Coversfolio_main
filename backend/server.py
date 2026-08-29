@@ -424,24 +424,40 @@ SLA_DEFINITIONS = {
     "pre_auth": {
         "label": "Cashless pre-authorization decision", "hours": 1,
         "applicable_to": ["Cashless"],
-        "citation": "IRDAI Master Circular on Health Insurance Business (2024): insurer must decide within 1 hour of the hospital's cashless request.",
+        "citation": "IRDAI Master Circular on Health Insurance Business, ref. IRDAI/HLT/CIR/PRO/84/5/2024, dated 29 May 2024: insurer must decide within 1 hour of the hospital's complete cashless request.",
     },
     "discharge": {
         "label": "Final discharge authorization", "hours": 3,
         "applicable_to": ["Cashless"],
-        "citation": "IRDAI Master Circular on Health Insurance Business (2024): final discharge authorization within 3 hours; the insurer bears any resulting extra hospital charges if this is missed.",
+        "citation": "IRDAI Master Circular on Health Insurance Business, ref. IRDAI/HLT/CIR/PRO/84/5/2024, dated 29 May 2024: final discharge authorization within 3 hours; the insurer bears any resulting extra hospital charges if this is missed.",
     },
     "intimation": {
+        # This 48-hour figure comes specifically from the "Cashless Everywhere"
+        # entitlement (using cashless at a hospital outside the insurer's own
+        # network), not a general reimbursement-claim intimation deadline - a
+        # pure reimbursement claim's intimation window is normally set by the
+        # policy's own wording, not a single IRDAI-mandated number, which is
+        # why this no longer claims to apply to Reimbursement claims too.
         "label": "Cashless-anywhere intimation window", "hours": 48,
-        "applicable_to": ["Cashless", "Reimbursement"],
-        "citation": "General Insurance Council 'Cashless Everywhere' (Jan 2024): notify the insurer 48 hours before a planned procedure, or within 48 hours for emergencies.",
+        "applicable_to": ["Cashless"],
+        "citation": "General Insurance Council 'Cashless Everywhere' circular, 24 Jan 2024: notify the insurer at least 48 hours before a planned procedure, or within 48 hours for an emergency, to use cashless at a hospital outside the insurer's own network.",
     },
     "reimbursement_decision": {
         "label": "Reimbursement settlement decision", "hours": 720,
         "applicable_to": ["Reimbursement"],
-        "citation": "Commonly cited as a 30-day decision window from receipt of the last necessary document - this figure is not yet verified against the primary IRDAI text, so treat it as approximate.",
+        "citation": "IRDA (Protection of Policyholders' Interests) Regulations: a claim must be paid or disputed with reasons within 30 days of receiving all relevant papers - extending to 45 days total if the insurer needs to investigate. Overdue payment accrues interest at 2% above the applicable bank rate.",
     },
 }
+
+# Not a start/resolve-style clock like the entries above - just a fact worth
+# surfacing wherever reimbursement claim guidance is shown. Insurers have a
+# documented pattern of dragging out claims by requesting documents in
+# several rounds instead of all at once; this is the rule that prevents it.
+REIMBURSEMENT_QUERY_RULE = (
+    "IRDA (Protection of Policyholders' Interests) Regulations: if the insurer needs more documents or "
+    "clarification, it must ask for everything it needs within 15 days of receiving your claim, in one go - "
+    "not through several separate rounds of requests."
+)
 
 
 class SlaStart(BaseModel):
@@ -2346,6 +2362,13 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
         "missing_hospitalization_dates": not admission_date or not discharge_date,
         "coverage_check": coverage_check,
         "cheat_sheet": cheat_sheet,
+        # Read-only reference, not a clock to start/track - deliberately just
+        # informs, since tracking settlement isn't what this app does. Only
+        # shows entitlements that actually apply to this claim's type.
+        "know_your_rights": [
+            {"label": v["label"], "timeframe": f"{v['hours']} hour{'s' if v['hours'] != 1 else ''}" if v["hours"] < 24 else f"{v['hours'] // 24} days", "citation": v["citation"]}
+            for v in SLA_DEFINITIONS.values() if claim["type"] in v["applicable_to"]
+        ] + ([{"label": "Document requests must come all at once", "timeframe": "within 15 days", "citation": REIMBURSEMENT_QUERY_RULE}] if claim["type"] == "Reimbursement" else []),
     }
 
 

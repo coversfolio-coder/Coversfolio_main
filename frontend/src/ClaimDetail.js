@@ -507,6 +507,26 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                       )}
                     </div>
                   )}
+
+                  {claimForm.know_your_rights?.length > 0 && (
+                    <div className="cf-card" data-testid="know-your-rights">
+                      <div className="cf-card-head">
+                        <h3>Know your rights</h3>
+                        <p>What IRDAI actually requires of your insurer for this kind of claim - reference only, not something this app tracks or enforces on your behalf.</p>
+                      </div>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        {claimForm.know_your_rights.map((r, i) => (
+                          <div key={i} className="entry" data-testid={`right-item-${i}`}>
+                            <header style={{ marginBottom: 4 }}>
+                              <div style={{ flex: 1 }}><strong style={{ fontSize: 12 }}>{r.label}</strong></div>
+                              <span className="chip chip-neutral">{r.timeframe}</span>
+                            </header>
+                            <p style={{ fontSize: 10, color: "var(--muted)", margin: 0, lineHeight: 1.5 }}>{r.citation}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </section>

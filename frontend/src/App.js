@@ -18,8 +18,8 @@ import DocumentsPage from "@/DocumentsPage";
 const navItems = [
   { label: "Claim packets", icon: LayoutDashboard, id: "workspace" },
   { label: "Policies & people", icon: ShieldCheck, id: "policies" },
-  { label: "Evidence & Inventory", icon: Home, id: "evidence" },
   { label: "Documents", icon: FileText, id: "documents" },
+  { label: "Evidence & Inventory", icon: Home, id: "evidence" },
 ];
 
 function formatINR(n) {
@@ -224,11 +224,38 @@ function AuthScreen({ onAuthenticated }) {
           <span><strong>Your files are private</strong><small>Secure session · household access only</small></span>
         </div>
       </div>
-      <div className="auth-art">
-        <div>
-          <span>01</span>
+      <div className="auth-art" data-testid="auth-marketing-panel">
+        <div className="auth-art-blobs" aria-hidden="true"><span /><span /><span /></div>
+        <div className="auth-art-inner">
+          <span className="auth-art-kicker">WHAT WE'RE BUILDING</span>
           <h2>A calmer way<br />through a claim.</h2>
-          <p>Organise evidence, understand the next step, and keep every decision yours.</p>
+          <p className="auth-art-lede">
+            Coversfolio helps Indian households organize insurance policies and prepare everything needed to file a claim - clearly, privately, on your own terms. We compile your file; we don't sell insurance, settle claims, or act as your insurer's intermediary.
+          </p>
+
+          <div className="auth-art-features">
+            <div className="auth-art-feature">
+              <BookOpen size={17} />
+              <div><strong>One place for every policy</strong><small>Sum insured, renewal dates, and who's covered - tracked automatically, no more digging through email.</small></div>
+            </div>
+            <div className="auth-art-feature">
+              <Search size={17} />
+              <div><strong>Plain-language policy analysis</strong><small>Maternity cover, waiting periods, and exclusions explained - not buried in 40 pages of fine print.</small></div>
+            </div>
+            <div className="auth-art-feature">
+              <FileText size={17} />
+              <div><strong>A real claim compiler</strong><small>Bills sorted automatically, a field-by-field cheat sheet, and the right checklist for Cashless or Reimbursement.</small></div>
+            </div>
+            <div className="auth-art-feature">
+              <ShieldCheck size={17} />
+              <div><strong>Private by design</strong><small>Your documents stay yours. We never sell data or act as a licensed insurance intermediary.</small></div>
+            </div>
+          </div>
+
+          <div className="auth-art-roadmap">
+            <span>COMING NEXT</span>
+            <p>Insurer-specific requirement guides, deeper coverage insights, and a smarter document checklist built from real IRDAI regulations.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -274,7 +301,7 @@ function AccountMenu({ user, onManageAccess, onSignOut, onSupport }) {
           <div className="account-menu-meta"><ShieldCheck size={13} /><span>Signed in with email</span></div>
           <div className="account-menu-list">
             {user.role === "owner" && (
-              <button role="menuitem" onClick={() => { setOpen(false); onManageAccess(); }} data-testid="account-menu-manage-access"><Settings size={15} /><span>Manage household access</span></button>
+              <button role="menuitem" onClick={() => { setOpen(false); onManageAccess(); }} data-testid="account-menu-manage-access"><Settings size={15} /><span>Manage members</span></button>
             )}
             <button role="menuitem" onClick={() => { setOpen(false); onSupport(); }} data-testid="account-menu-support"><LifeBuoy size={15} /><span>Support centre</span></button>
             <button role="menuitem" className="danger" onClick={() => { setOpen(false); onSignOut(); }} data-testid="account-menu-signout"><LogOut size={15} /><span>Sign out</span></button>
@@ -401,7 +428,7 @@ function App() {
     <aside className="sidebar" data-testid="primary-sidebar">
       <div className="brand" data-testid="brand-mark"><img className="brand-icon" src="/brand-icon.png" alt="Coversfolio" /><span><span className="brand-covers">Covers</span><span className="brand-folio">folio</span></span></div>
       <div className="household-switcher" data-testid="household-switcher"><span className="avatar">M</span><span><small>HOUSEHOLD</small><strong>{data.household.name}</strong></span><ChevronRight size={15} /></div>
-      <nav className="nav-list" data-testid="main-navigation">{navItems.map(({ label, icon: Icon, id }) => <button key={id} data-testid={`nav-${id}`} className={active === id ? "nav-item active" : "nav-item"} onClick={() => navigate(id)}><Icon size={18} /><span>{label}</span></button>)}<button className="nav-item" data-testid="nav-household" onClick={openMembers}><Users size={18} /><span>Household</span></button></nav>
+      <nav className="nav-list" data-testid="main-navigation">{navItems.map(({ label, icon: Icon, id }) => <button key={id} data-testid={`nav-${id}`} className={active === id ? "nav-item active" : "nav-item"} onClick={() => navigate(id)}><Icon size={18} /><span>{label}</span></button>)}<button className="nav-item" data-testid="nav-household" onClick={openMembers}><Users size={18} /><span>Members</span></button></nav>
       <div className="sidebar-bottom"><button className="nav-item" data-testid="nav-support" onClick={() => notify("Support centre is ready for your questions")}><LifeBuoy size={18} /><span>Support centre</span></button><div className="privacy-note" data-testid="privacy-note"><ShieldCheck size={17} /><span><strong>Your files stay private</strong><small>Encrypted and only shared by you</small></span></div><button className="profile" data-testid="sidebar-profile" onClick={() => document.querySelector('[data-testid="account-menu-trigger"]')?.click()}><Avatar user={user} /><span><strong>{user.name}</strong><small>{user.role === "owner" ? "Household owner" : user.role === "agent" ? "Read-only agent" : "Household member"}</small></span><Menu size={16} /></button></div>
     </aside>
     <main className="main-content">
@@ -603,7 +630,7 @@ function App() {
         {active === "documents" && <DocumentsPage canEdit={canEdit} notify={notify} onReviewAsPolicy={(detected) => { setPolicyPrefill(detected); navigate("policies"); }} />}
       </div>
     </main>
-    {showMembers && <div className="modal-backdrop" data-testid="members-modal"><div className="modal members-modal"><button className="close-button" aria-label="Close household access" data-testid="close-members-modal-button" onClick={() => setShowMembers(false)}><X size={18} /></button><p className="eyebrow">HOUSEHOLD ACCESS</p><h2>People in your household</h2><p className="modal-copy">Invite people to help prepare the file. Agents can view but cannot change claims.</p><form className="invite-form" onSubmit={inviteMember} data-testid="invite-member-form"><input required type="email" placeholder="person@example.com" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} data-testid="invite-email-input" /><select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} data-testid="invite-role-select"><option value="member">Household member</option><option value="agent">Read-only agent</option></select><button className="primary-button" data-testid="send-invite-button"><UserPlus size={16} /> Invite</button></form><div className="member-list" data-testid="member-list">{members.members.map(item => <div className={`member-row ${item.status === "revoked" ? "revoked" : ""}`} key={item.id} data-testid={`member-row-${item.id}`}><span className="avatar avatar-small">{item.name.slice(0, 2).toUpperCase()}</span><span><strong>{item.name}</strong><small>{item.email} · {item.role === "agent" ? "Read-only agent" : item.role === "owner" ? "Owner" : "Household member"}</small></span>{item.role !== "owner" && item.status !== "revoked" && <button className="member-action" aria-label={`Revoke ${item.name}`} data-testid={`revoke-member-${item.id}`} onClick={() => revokeMember(item.id)}><UserX size={15} /></button>}{item.status === "revoked" && <em>Revoked</em>}</div>)}{members.invites.map(item => <div className="member-row pending" key={item.id} data-testid={`invite-row-${item.id}`}><span className="avatar avatar-small">?</span><span><strong>{item.email}</strong><small>Pending · {item.role === "agent" ? "Read-only agent" : "Household member"}</small></span><button className="member-action" aria-label="Revoke invitation" data-testid={`revoke-invite-${item.id}`} onClick={() => revokeInvite(item.id)}><X size={15} /></button></div>)}</div><div className="activity-header"><span><History size={15} /> Recent access activity</span><small>{activity.length} events</small></div><div className="activity-list" data-testid="activity-list">{activity.slice(0, 5).map(event => <div className="activity-row" key={event.id}><span className="activity-dot" /><span><strong>{event.actor_name}</strong> {event.detail}<small>{new Date(event.created_at).toLocaleString()}</small></span></div>)}</div></div></div>}
+    {showMembers && <div className="modal-backdrop" data-testid="members-modal"><div className="modal members-modal"><button className="close-button" aria-label="Close household access" data-testid="close-members-modal-button" onClick={() => setShowMembers(false)}><X size={18} /></button><p className="eyebrow">MEMBERS</p><h2>People in your household</h2><p className="modal-copy">Invite people to help prepare the file. Agents can view but cannot change claims.</p><form className="invite-form" onSubmit={inviteMember} data-testid="invite-member-form"><input required type="email" placeholder="person@example.com" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} data-testid="invite-email-input" /><select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} data-testid="invite-role-select"><option value="member">Household member</option><option value="agent">Read-only agent</option></select><button className="primary-button" data-testid="send-invite-button"><UserPlus size={16} /> Invite</button></form><div className="member-list" data-testid="member-list">{members.members.map(item => <div className={`member-row ${item.status === "revoked" ? "revoked" : ""}`} key={item.id} data-testid={`member-row-${item.id}`}><span className="avatar avatar-small">{item.name.slice(0, 2).toUpperCase()}</span><span><strong>{item.name}</strong><small>{item.email} · {item.role === "agent" ? "Read-only agent" : item.role === "owner" ? "Owner" : "Household member"}</small></span>{item.role !== "owner" && item.status !== "revoked" && <button className="member-action" aria-label={`Revoke ${item.name}`} data-testid={`revoke-member-${item.id}`} onClick={() => revokeMember(item.id)}><UserX size={15} /></button>}{item.status === "revoked" && <em>Revoked</em>}</div>)}{members.invites.map(item => <div className="member-row pending" key={item.id} data-testid={`invite-row-${item.id}`}><span className="avatar avatar-small">?</span><span><strong>{item.email}</strong><small>Pending · {item.role === "agent" ? "Read-only agent" : "Household member"}</small></span><button className="member-action" aria-label="Revoke invitation" data-testid={`revoke-invite-${item.id}`} onClick={() => revokeInvite(item.id)}><X size={15} /></button></div>)}</div><div className="activity-header"><span><History size={15} /> Recent access activity</span><small>{activity.length} events</small></div><div className="activity-list" data-testid="activity-list">{activity.slice(0, 5).map(event => <div className="activity-row" key={event.id}><span className="activity-dot" /><span><strong>{event.actor_name}</strong> {event.detail}<small>{new Date(event.created_at).toLocaleString()}</small></span></div>)}</div></div></div>}
     {showNew && <div className="modal-backdrop" data-testid="new-claim-modal"><div className="modal"><button className="close-button" aria-label="Close" data-testid="close-new-claim-button" onClick={() => { setShowNew(false); setNewClaimPolicyId(""); }}><X size={18} /></button><p className="eyebrow">START A CLAIM</p><h2>What happened?</h2><p className="modal-copy">Choose a claim type to begin building your file.</p>{data.policies?.length > 0 && <label style={{ display: "block", marginBottom: 16, fontSize: 11, fontWeight: 600 }}>Which policy is this for? (optional)<select value={newClaimPolicyId} onChange={(e) => setNewClaimPolicyId(e.target.value)} data-testid="new-claim-policy-select" style={{ display: "block", width: "100%", marginTop: 6, padding: 10, borderRadius: 6, border: "1px solid var(--line)", fontSize: 12 }}><option value="">Not sure yet</option>{data.policies.map((p) => <option key={p.id} value={p.id}>{p.insurer_name} · {p.policy_type}</option>)}</select></label>}<div className="claim-options"><button data-testid="cashless-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New hospitalisation claim", claim_type: "Cashless", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Cashless claim saved"); } catch (err) { notify(apiError(err), true); } }}><Stethoscope size={20} /><strong>Cashless hospitalisation</strong><small>For planned or emergency care</small></button><button data-testid="reimbursement-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New reimbursement claim", claim_type: "Reimbursement", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Reimbursement claim saved"); } catch (err) { notify(apiError(err), true); } }}><ClipboardCheck size={20} /><strong>Reimbursement</strong><small>For expenses already paid</small></button></div></div></div>}
     {toast && (
       <div className={toast.isError ? "toast toast-error" : "toast"} role="status" data-testid="toast-message">
