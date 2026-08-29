@@ -757,7 +757,18 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 <label>Policy number<input required value={form.policy_number} onChange={(e) => setForm({ ...form, policy_number: e.target.value })} placeholder="SH-2026-00123" data-testid="policy-number-input" /></label>
               </div>
               <div className="row-2">
-                <label>Type<select value={form.policy_type} onChange={(e) => { setForm({ ...form, policy_type: e.target.value }); setTypeTouched(true); }} data-testid="policy-type-select"><option value="Health">Health</option><option value="Mediclaim">Mediclaim</option><option value="Home">Home</option></select></label>
+                <label>Type<select value={form.policy_type} onChange={(e) => { setForm({ ...form, policy_type: e.target.value }); setTypeTouched(true); }} data-testid="policy-type-select">
+                  <option value="Health">Health</option>
+                  <option value="Mediclaim">Mediclaim</option>
+                  <option value="Term Insurance">Term Insurance</option>
+                  <option value="Life Insurance">Life Insurance</option>
+                  <option value="Motor Insurance">Motor Insurance</option>
+                  <option value="Travel Insurance">Travel Insurance</option>
+                  <option value="Personal Accident">Personal Accident</option>
+                  <option value="Critical Illness">Critical Illness</option>
+                  <option value="Home">Home</option>
+                  <option value="Other">Other</option>
+                </select></label>
                 <label>Sum insured (₹)<input required type="number" min="1" value={form.sum_insured} onChange={(e) => setForm({ ...form, sum_insured: e.target.value })} placeholder="500000" data-testid="policy-sum-insured-input" /></label>
               </div>
               <div className="row-2">

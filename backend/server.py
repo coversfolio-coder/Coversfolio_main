@@ -363,7 +363,7 @@ class InsuredPerson(BaseModel):
 class PolicyCreate(BaseModel):
     insurer_name: str = Field(min_length=2, max_length=120)
     policy_number: str = Field(min_length=2, max_length=60)
-    policy_type: str = Field(pattern="^(Health|Home|Mediclaim)$")
+    policy_type: str = Field(pattern="^(Health|Mediclaim|Term Insurance|Life Insurance|Motor Insurance|Travel Insurance|Personal Accident|Critical Illness|Home|Other)$")
     sum_insured: float = Field(gt=0)
     start_date: str = Field(min_length=4, max_length=20)
     end_date: str = Field(min_length=4, max_length=20)
@@ -379,7 +379,7 @@ class PolicyCreate(BaseModel):
 class PolicyUpdate(BaseModel):
     insurer_name: str | None = Field(default=None, min_length=2, max_length=120)
     policy_number: str | None = Field(default=None, min_length=2, max_length=60)
-    policy_type: str | None = Field(default=None, pattern="^(Health|Home|Mediclaim)$")
+    policy_type: str | None = Field(default=None, pattern="^(Health|Mediclaim|Term Insurance|Life Insurance|Motor Insurance|Travel Insurance|Personal Accident|Critical Illness|Home|Other)$")
     sum_insured: float | None = Field(default=None, gt=0)
     start_date: str | None = Field(default=None, min_length=4, max_length=20)
     end_date: str | None = Field(default=None, min_length=4, max_length=20)
@@ -594,6 +594,18 @@ def parse_policy_fields(text: str, table_sum_insured: float | None = None) -> di
         result["policy_type"] = "Health"
     elif any(k in lower for k in ("home insurance", "householder", "fire insurance", "property insurance", "house owner")):
         result["policy_type"] = "Home"
+    elif any(k in lower for k in ("motor insurance", "own damage", "third party liability", "vehicle insurance", "two wheeler insurance", "car insurance")):
+        result["policy_type"] = "Motor Insurance"
+    elif any(k in lower for k in ("travel insurance", "trip cancellation", "overseas travel")):
+        result["policy_type"] = "Travel Insurance"
+    elif any(k in lower for k in ("term insurance", "term plan", "term life")):
+        result["policy_type"] = "Term Insurance"
+    elif any(k in lower for k in ("personal accident", "accidental death benefit")):
+        result["policy_type"] = "Personal Accident"
+    elif "critical illness" in lower:
+        result["policy_type"] = "Critical Illness"
+    elif any(k in lower for k in ("endowment", "whole life", "unit linked", "ulip", "life insurance")):
+        result["policy_type"] = "Life Insurance"
 
     return result
 
