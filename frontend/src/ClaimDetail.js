@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import client, { API, apiError } from "@/api";
 import {
   X, FileText, MessageSquare, IndianRupee, AlertTriangle,
-  Undo2, Check, Plus, ClipboardList, ShieldAlert, CheckCircle2, Files, Link2, FileSpreadsheet, Trash2
+  Undo2, Check, Plus, ClipboardList, ShieldAlert, CheckCircle2, Files, Link2, FileSpreadsheet, Trash2, Upload
 } from "lucide-react";
 
 
@@ -42,6 +42,12 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   // Kept in component state only: never sent to the backend, cleared on reload.
   const [bankForm, setBankForm] = useState({ tpa_membership_id: "", pan_number: "", bank_account_holder: "", bank_account_number: "", bank_name_branch: "", cheque_payable_name: "", ifsc_code: "" });
   const [activeSheetSection, setActiveSheetSection] = useState(null);
+  const [uploadingCategory, setUploadingCategory] = useState(null);
+  const packetFileInputRef = useRef(null);
+  const uploadTargetCategory = useRef(null);
+  const [claimFormUploadResult, setClaimFormUploadResult] = useState(null);
+  const [analyzingClaimForm, setAnalyzingClaimForm] = useState(false);
+  const claimFormFileInputRef = useRef(null);
 
   const load = async () => {
     try {
@@ -78,6 +84,45 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   useEffect(() => { setActiveSheetSection(null); load(); }, [claimId]);
 
   const refresh = async () => { await load(); onChange && onChange(); };
+
+  const triggerPacketUpload = (category) => {
+    uploadTargetCategory.current = category;
+    packetFileInputRef.current?.click();
+  };
+  const onPacketFilePicked = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const category = uploadTargetCategory.current;
+    setUploadingCategory(category);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("category", category);
+      formData.append("linked_claim_id", claimId);
+      await client.post("/documents", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
+      notify("Document uploaded");
+      await refresh();
+    } catch (err) { notify(apiError(err), true); } finally { setUploadingCategory(null); }
+  };
+
+  const onClaimFormFilePicked = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setAnalyzingClaimForm(true);
+    setClaimFormUploadResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await client.post(`/claims/${claimId}/analyze-claim-form`, formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
+      setClaimFormUploadResult(res.data);
+      notify(res.data.mode === "matched" ? "Claim form analyzed" : "Form scanned (AI matching isn't set up on this server, showing raw text instead)");
+    } catch (err) {
+      if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet", true);
+      else notify(apiError(err), true);
+    } finally { setAnalyzingClaimForm(false); }
+  };
 
   const call = async (fn, ok) => {
     try { await fn(); notify(ok); await refresh(); }
@@ -180,6 +225,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
               <p className="readonly-hint" style={{ marginBottom: 14 }}>
                 Documents in the order insurers commonly ask for them{claim.type === "Reimbursement" ? " for a reimbursement claim" : " for a cashless claim"}. This is a helpful default, not a guarantee any specific insurer requires exactly this - always check your policy's own checklist too.
               </p>
+              <input ref={packetFileInputRef} type="file" hidden onChange={onPacketFilePicked} accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" data-testid="packet-upload-input" />
               <div className="entry-list">
                 {packet.sections.map((section) => (
                   <article className="entry" key={section.category} data-testid={`packet-section-${section.category}`}>
@@ -192,6 +238,16 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                         {section.status === "attached" ? "Attached" : section.status === "suggested" ? "Suggested" : "Missing"}
                       </span>
                     </header>
+                    {section.guidance?.description && (
+                      <p style={{ fontSize: 11, color: "var(--muted)", margin: "8px 0 0", lineHeight: 1.5 }} data-testid={`packet-guidance-${section.category}`}>{section.guidance.description}</p>
+                    )}
+                    {section.guidance?.accepted_types && (
+                      <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 11, color: "var(--muted)" }} data-testid={`packet-accepted-types-${section.category}`}>
+                        {section.guidance.accepted_types.map((t) => (
+                          <li key={t.label}>{t.label}{t.sides === 2 ? " (front & back, 2 files)" : ""}</li>
+                        ))}
+                      </ul>
+                    )}
                     {section.attached.length > 0 && (
                       <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
                         {section.attached.map((d) => <li key={d.id} style={{ fontSize: 11 }}>{d.filename}</li>)}
@@ -203,7 +259,16 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                         {canEdit && <button className="text-button" data-testid={`attach-document-${d.id}`} onClick={() => attachDocument(d.id)}><Link2 size={13} /> Attach</button>}
                       </div>
                     ))}
-                    {section.status === "missing" && <p style={{ fontSize: 11, color: "var(--muted)", margin: "6px 0 0" }}>Not uploaded yet - add one from the Documents page.</p>}
+                    {canEdit && (
+                      <button
+                        type="button" className="text-button" style={{ marginTop: 8 }}
+                        disabled={uploadingCategory === section.category}
+                        onClick={() => triggerPacketUpload(section.category)}
+                        data-testid={`upload-packet-${section.category}`}
+                      >
+                        <Upload size={13} /> {uploadingCategory === section.category ? "Uploading…" : section.attached.length > 0 ? "Upload another" : "Upload document"}
+                      </button>
+                    )}
                   </article>
                 ))}
               </div>
@@ -483,10 +548,17 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                                   {current.fields.map((f) => {
                                     const filled = f.value !== null && f.value !== undefined && f.value !== "";
                                     return (
-                                      <div className="field" key={f.label}>
-                                        <span className="f-label">{f.label}</span>
-                                        <span className={`f-value ${filled ? "" : "empty"}`}>{filled ? String(f.value) : "Pending"}</span>
-                                      </div>
+                                      <Fragment key={f.label}>
+                                        <div className="field">
+                                          <span className="f-label">{f.label}</span>
+                                          <span className={`f-value ${filled ? "" : "empty"}`}>{filled ? String(f.value) : "Pending"}</span>
+                                        </div>
+                                        {!filled && f.hint && (
+                                          <p style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "var(--faint)", margin: "-6px 0 4px", fontStyle: "italic" }} data-testid={`field-hint-${f.label}`}>
+                                            {f.hint}
+                                          </p>
+                                        )}
+                                      </Fragment>
                                     );
                                   })}
                                 </div>
@@ -519,6 +591,47 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                     );
                   })()}
                   )}
+
+                  <div className="cf-card" data-testid="claim-form-upload-card">
+                    <div className="cf-card-head">
+                      <h3>Have the insurer's actual claim form?</h3>
+                      <p>Upload a photo or scan of it - we'll match it against what's already known about this claim and tell you what to write where, field by field.</p>
+                    </div>
+                    <input ref={claimFormFileInputRef} type="file" hidden onChange={onClaimFormFilePicked} accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" data-testid="claim-form-upload-input" />
+                    <button
+                      type="button" className="scan-upload-button" disabled={analyzingClaimForm}
+                      onClick={() => claimFormFileInputRef.current?.click()}
+                      data-testid="upload-claim-form-button"
+                    >
+                      <Upload size={16} />
+                      <span>
+                        <strong>{analyzingClaimForm ? "Analyzing…" : "Upload claim form"}</strong>
+                        <small>PDF or photo - matched against your saved claim details automatically.</small>
+                      </span>
+                    </button>
+
+                    {claimFormUploadResult && claimFormUploadResult.mode === "matched" && (
+                      <div style={{ marginTop: 16 }} data-testid="claim-form-match-results">
+                        <div className="cf-cheat-table" style={{ gridTemplateColumns: "1.4fr 1fr .8fr" }}>
+                          <div className="cf-head">Field on your form</div><div className="cf-head">What to write</div><div className="cf-head">Status</div>
+                          {claimFormUploadResult.fields.map((f, i) => (
+                            <Fragment key={i}>
+                              <div>{f.form_field_label}</div>
+                              <div style={{ fontWeight: f.matched ? 600 : 400 }}>{f.suggested_value || "—"}</div>
+                              <div className={f.matched ? "cf-filled" : "cf-missing"}>{f.matched ? "We know this" : "Fill in yourself"}</div>
+                            </Fragment>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {claimFormUploadResult && claimFormUploadResult.mode === "ocr_only" && (
+                      <div className="cf-notice" style={{ marginTop: 16 }} data-testid="claim-form-ocr-results">
+                        AI matching isn't set up on this server, so here's the text we could read off your form instead - compare it manually against your Cheat Sheet above.
+                        <pre style={{ whiteSpace: "pre-wrap", fontSize: 11, marginTop: 8, fontFamily: "inherit" }}>{claimFormUploadResult.extracted_text}</pre>
+                      </div>
+                    )}
+                  </div>
 
                   {claimForm.know_your_rights?.length > 0 && (
                     <div className="cf-card" data-testid="know-your-rights">

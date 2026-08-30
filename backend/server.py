@@ -7,6 +7,7 @@ import asyncio
 import difflib
 import hashlib
 import io
+import json
 import os
 import re
 import secrets
@@ -232,6 +233,44 @@ DOCUMENT_CATEGORIES = {
     "claim_form": "Insurer claim form",
     "purchase_receipt": "Purchase receipt",
     "general": "Other",
+}
+
+# Practical guidance shown next to each checklist item - what actually counts,
+# not just a category name. id_proof in particular needs real enumeration
+# since "ID proof" alone doesn't tell anyone which document, or that some of
+# them need both sides photographed.
+CATEGORY_GUIDANCE = {
+    "policy_document": {
+        "description": "Your policy schedule or certificate - the document showing your policy number, sum insured, and coverage period. Usually emailed to you when you bought or renewed the policy, or downloadable from your insurer's portal or app.",
+    },
+    "id_proof": {
+        "description": "Any one of the following, current and not expired. For double-sided cards, upload both sides as two files - the checklist counts the category as covered once you've uploaded at least one, but the insurer needs both sides to actually accept it.",
+        "accepted_types": [
+            {"label": "PAN card", "sides": 1},
+            {"label": "Aadhaar card", "sides": 2},
+            {"label": "Voter ID", "sides": 2},
+            {"label": "Passport", "sides": 1},
+            {"label": "Driving licence", "sides": 2},
+        ],
+    },
+    "discharge_summary": {
+        "description": "Issued by the hospital at discharge - includes diagnosis, treatment given, and the doctor's signature. This is the single document most reimbursement rejections trace back to when it's missing pages or illegible.",
+    },
+    "hospital_bill": {
+        "description": "The hospital's final, itemized bill - room charges, procedure costs, and any other charges broken down separately, not just a total amount.",
+    },
+    "consultation": {
+        "description": "Doctor's consultation notes or prescriptions from before or after hospitalization, if your policy covers pre/post-hospitalization expenses.",
+    },
+    "pharmacy_bill": {
+        "description": "Itemized pharmacy or medicine bills, ideally matched to a prescription from the same treatment period.",
+    },
+    "opd_receipt": {
+        "description": "Receipts for outpatient consultations or tests related to this treatment, if applicable to your policy.",
+    },
+    "obstetric_history": {
+        "description": "A note from the treating doctor covering Gravida/Para/Living children/Abortions history - part of the hospital's own Claim Form Part B for maternity claims.",
+    },
 }
 
 # The order insurers commonly expect documents in, per claim type - drawn from
@@ -874,6 +913,64 @@ def analyze_policy_with_gemini(pdf_bytes: bytes) -> dict:
         except (httpx.TimeoutException, TimeoutError) as exc:
             logger.error("Gemini request timed out after 45s: %s", exc)
             raise AIAnalysisFailed("Gemini didn't respond in time - this can happen with a large or complex document. Try again, or use the standard scan instead.") from exc
+        except Exception as exc:
+            raise AIAnalysisFailed(str(exc)) from exc
+
+    raise AIAnalysisFailed(str(last_exc))
+
+
+class ClaimFormFieldMatch(BaseModel):
+    form_field_label: str = Field(description="The exact field label/question as it appears on the uploaded form")
+    suggested_value: str | None = Field(default=None, description="The value to write in this field, if we have the information - null if we don't know it")
+    matched: bool = Field(description="True if suggested_value comes from the person's own saved data, false if this needs to be filled in manually")
+
+
+class ClaimFormAnalysis(BaseModel):
+    fields: list[ClaimFormFieldMatch] = Field(description="Every fillable field/question found on the form, in the order they appear")
+
+
+CLAIM_FORM_MATCH_PROMPT = """You are looking at a photo or scan of an insurance claim form - it may be blank or partially filled in.
+
+Identify every fillable field, question, or blank on this form, in the order they appear (e.g. "Policy Number", "Name of Insured", "Date of Admission", "Diagnosis").
+
+For each field, check the "known information about this claim" JSON provided separately. If that data can answer this exact field, set suggested_value to the matching value and matched=true. If the form field doesn't correspond to anything in the known data, set suggested_value to null and matched=false - do not guess or invent a value.
+
+Return only the structured field list - no commentary."""
+
+
+def analyze_claim_form_with_gemini(file_bytes: bytes, mime_type: str, known_data: dict) -> dict:
+    if not GEMINI_API_KEY:
+        raise AIAnalysisUnavailable("AI analysis is not configured on this server")
+
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=45_000))
+    max_attempts = 2
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[
+                    genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+                    CLAIM_FORM_MATCH_PROMPT,
+                    f"Known information about this claim (JSON):\n{json.dumps(known_data, default=str)}",
+                ],
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ClaimFormAnalysis,
+                    temperature=0.1,
+                ),
+            )
+            parsed = ClaimFormAnalysis.model_validate_json(response.text)
+            return parsed.model_dump()
+        except genai_errors.ServerError as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                logger.warning("Gemini server error (attempt %d/%d), retrying: %s", attempt + 1, max_attempts, exc)
+                time.sleep(2 * (attempt + 1))
+                continue
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            logger.error("Gemini claim-form analysis timed out after 45s: %s", exc)
+            raise AIAnalysisFailed("Gemini didn't respond in time - this can happen with a large or complex document. Try again.") from exc
         except Exception as exc:
             raise AIAnalysisFailed(str(exc)) from exc
 
@@ -2352,6 +2449,7 @@ async def get_claim_document_packet(claim_id: str, user: dict = Depends(current_
             "attached": attached,
             "suggested": suggested,
             "status": "attached" if attached else ("suggested" if suggested else "missing"),
+            "guidance": CATEGORY_GUIDANCE.get(category),
         })
 
     complete_count = sum(1 for s in sections if s["status"] == "attached")
@@ -2466,27 +2564,49 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
         for item in buckets[bucket]
     ]
 
+    # Practical guidance for fields that aren't self-explanatory, shown only
+    # when the field is still empty - a filled-in field doesn't need a hint.
+    field_hints = {
+        "Date of commencement of first insurance without break": "Check your very first health policy's start date, even if you've since switched insurers or renewed - not this specific policy's start date.",
+        "Hospitalized in the last 4 years since inception of the contract?": "Think back over the life of this specific policy, not just this hospitalization.",
+        "Occupation": "Select the closest match to the patient's actual occupation - insurers use broad categories (Service, Self Employed, Home Maker, Student, Retired).",
+        "Room category occupied": "Check the room-charge line item on your hospital bill - it usually names the category directly (e.g. 'Twin Sharing', 'Single AC').",
+        "Date of injury / disease first detected / delivery": "For an illness, check your discharge summary's history section for when symptoms first appeared. For an injury, use the date it happened.",
+        "If medico-legal": "Only relevant for injury cases (e.g. accidents, assault) - check your discharge summary or admission notes; the hospital marks this at admission.",
+        "If injury, give cause": "Check your discharge summary's admission notes, which usually record how the injury happened.",
+        "Reported to police": "Only relevant if this was an accident or injury requiring police involvement.",
+        "MLC report & Police FIR attached": "MLC (Medico-Legal Case) reports apply to injury cases the hospital is required to report - check with the hospital's records department if you're unsure whether one was filed.",
+        "System of medicine": "Almost always 'Allopathy' unless you were treated under Ayurveda, Homeopathy, or another system - check your discharge summary's letterhead.",
+        "Treating doctor": "Check your discharge summary's letterhead or signature block.",
+        "Hospital registration no.": "Usually printed on the hospital's letterhead or discharge summary - not something you'll know offhand.",
+    }
+
+    def with_hint(field: dict) -> dict:
+        if (field["value"] is None or field["value"] == "") and field["label"] in field_hints:
+            field["hint"] = field_hints[field["label"]]
+        return field
+
     cheat_sheet = [
         {
             "section": "A", "title": "Details of primary insured",
-            "fields": [
+            "fields": [with_hint(f) for f in [
                 {"label": "Policy No.", "value": policy.get("policy_number") if policy else None},
                 {"label": "Name", "value": household["name"]},
-            ],
+            ]],
         },
         {
             "section": "B", "title": "Details of insurance history",
-            "fields": [
+            "fields": [with_hint(f) for f in [
                 {"label": "Currently covered by another Mediclaim / Health Insurance?", "value": yn(claim.get("has_other_insurance"))},
                 {"label": "Date of commencement of first insurance without break", "value": claim.get("first_insurance_start_date")},
                 {"label": "If yes, company name", "value": claim.get("other_insurer_name")},
                 {"label": "Hospitalized in the last 4 years since inception of the contract?", "value": yn(claim.get("hospitalized_last_4_years"))},
                 {"label": "Previously covered by another Mediclaim / Health insurance?", "value": yn(claim.get("previously_covered_other_insurance"))},
-            ],
+            ]],
         },
         {
             "section": "C", "title": "Details of insured person hospitalized",
-            "fields": [
+            "fields": [with_hint(f) for f in [
                 {"label": "Name", "value": claim.get("patient_name")},
                 {"label": "Gender", "value": claim.get("patient_gender")},
                 {"label": "Date of birth", "value": claim.get("patient_dob")},
@@ -2495,11 +2615,11 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
                 {"label": "Address", "value": claim.get("patient_address")},
                 {"label": "Phone", "value": claim.get("patient_phone")},
                 {"label": "Email", "value": claim.get("patient_email")},
-            ],
+            ]],
         },
         {
             "section": "D", "title": "Details of hospitalization",
-            "fields": [
+            "fields": [with_hint(f) for f in [
                 {"label": "Name of hospital where admitted", "value": claim.get("hospital_name")},
                 {"label": "Room category occupied", "value": claim.get("room_category")},
                 {"label": "Hospitalization due to", "value": claim.get("hospitalization_cause") or ("Maternity" if claim.get("is_maternity") else None)},
@@ -2513,7 +2633,7 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
                 {"label": "Reported to police", "value": yn(claim.get("reported_to_police"))},
                 {"label": "MLC report & Police FIR attached", "value": yn(claim.get("mlc_report_attached"))},
                 {"label": "System of medicine", "value": claim.get("system_of_medicine")},
-            ],
+            ]],
         },
     ]
 
@@ -2570,7 +2690,55 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
     }
 
 
-def render_claim_form_pdf(data: dict) -> io.BytesIO:
+@api_router.post("/claims/{claim_id}/analyze-claim-form")
+async def analyze_claim_form(claim_id: str, file: UploadFile = File(...), user: dict = Depends(current_user)):
+    """Lets the person upload their insurer's actual claim form (blank or
+    partially filled) and get it matched against what Coversfolio already
+    knows about this claim - reusing the exact same computed data already
+    shown in the Cheat Sheet, so suggestions here can never drift out of sync
+    with what the person already sees on that tab."""
+    _require_writer(user)
+    if file.content_type not in OCR_SUPPORTED_TYPES:
+        raise HTTPException(status_code=415, detail="Upload a PDF or a JPG/PNG/WEBP/HEIC photo of the claim form")
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File is too large. Maximum size is {MAX_UPLOAD_BYTES // (1024*1024)}MB")
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+
+    claim_form_data = await generate_claim_form(claim_id, user)
+    known_data = {}
+    for section in claim_form_data.get("cheat_sheet", []):
+        for field in section.get("fields", []):
+            if field.get("value") not in (None, ""):
+                known_data[field["label"]] = field["value"]
+
+    if not GEMINI_API_KEY:
+        # No AI configured - fall back to plain OCR so the feature still does
+        # something useful (shows what's on the form) rather than a bare error.
+        try:
+            ocr_result = await asyncio.to_thread(
+                ocr_module.extract_text, file.filename or "", file.content_type, contents,
+                gemini_api_key=None, gemini_model=GEMINI_MODEL,
+            )
+        except ocr_module.OCRError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        await audit(user, "claim_form_ocr_only", f"OCR'd uploaded claim form '{file.filename}' (AI matching unavailable)")
+        return {"mode": "ocr_only", "extracted_text": ocr_result["text"], "fields": [], "known_data": known_data}
+
+    mime_type = "application/pdf" if file.content_type == "application/pdf" else file.content_type
+    try:
+        analysis = await asyncio.to_thread(analyze_claim_form_with_gemini, contents, mime_type, known_data)
+    except AIAnalysisUnavailable as exc:
+        raise HTTPException(status_code=501, detail="AI analysis is not configured on this server yet") from exc
+    except AIAnalysisFailed as exc:
+        logger.error("Claim form analysis failed: %s", exc)
+        if "RESOURCE_EXHAUSTED" in str(exc) or "429" in str(exc):
+            raise HTTPException(status_code=429, detail="You've hit Gemini's daily free-tier limit (20 requests/day) - try again tomorrow") from exc
+        raise HTTPException(status_code=502, detail="Couldn't analyze this form - try again, or check it's a clear, readable photo or scan") from exc
+
+    await audit(user, "claim_form_analyzed", f"Analyzed uploaded claim form '{file.filename}' against known claim data")
+    return {"mode": "matched", "fields": analysis["fields"], "known_data": known_data}
     """Turns the computed claim-form data into an actual downloadable document -
     not a replacement for the insurer's own Part A/Part B forms (those need real
     signatures), but a ready reference that has every figure and document status
