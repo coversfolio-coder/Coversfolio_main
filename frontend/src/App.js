@@ -537,44 +537,28 @@ function App() {
       </header>
       <div className="content-wrap">
         {active === "workspace" && <>
-        <section className="hero-panel" data-testid="dashboard-hero">
-          <div className="hero-top-row">
-            {(() => {
-              const openCount = data.attention.length;
-              const severe = data.attention.some((a) => a.tone === "red");
-              return (
-                <span className={`hero-status-pill ${openCount === 0 ? "ok" : severe ? "crit" : "warn"}`} data-testid="hero-status-pill">
-                  <i />{openCount === 0 ? "All caught up" : `${openCount} item${openCount === 1 ? "" : "s"} need${openCount === 1 ? "s" : ""} attention`}
-                </span>
-              );
-            })()}
-            <span className="hero-clock" data-testid="hero-clock">{now.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" }).toUpperCase()} · {now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</span>
-          </div>
-
-          <h1 data-testid="workspace-title">Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, {user.name?.split(" ")[0] || "there"}<span className="title-accent">.</span></h1>
-          <p className="hero-lede" data-testid="workspace-subtitle">One clear view of everything moving your claim forward.</p>
-
-          <div className="hero-actions">
-            <button className="hero-button-outline" data-testid="quick-upload-document-button" onClick={() => navigate("documents")}><Upload size={15} /> Upload document</button>
-            <button className="primary-button" data-testid="quick-add-policy-button" onClick={() => navigate("policies")}><Plus size={18} /> Add policy</button>
-          </div>
-
-          {data.kpis && (
-            <div className="hero-stats" data-testid="kpi-grid">
-              <div className="hero-stat" data-testid="kpi-sum-insured">
-                <strong>{formatINR(data.kpis.total_sum_insured)}</strong>
-                <span>Total sum insured</span>
-              </div>
-              <div className="hero-stat" data-testid="kpi-active-policies">
-                <strong>{data.kpis.active_policies}</strong>
-                <span>Polic{data.kpis.active_policies === 1 ? "y" : "ies"} tracked · {data.kpis.insurer_count} insurer{data.kpis.insurer_count === 1 ? "" : "s"}</span>
-              </div>
-              <div className="hero-stat" data-testid="kpi-packets-in-progress">
-                <strong>{data.kpis.packets_in_progress}</strong>
-                <span>Claim packet{data.kpis.packets_in_progress === 1 ? "" : "s"} in progress</span>
-              </div>
+        <section className="page-head" data-testid="dashboard-hero">
+          <div>
+            <h1 data-testid="workspace-title">Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}, {user.name?.split(" ")[0] || "there"}<span className="title-accent">.</span></h1>
+            <div className="context-line" data-testid="workspace-subtitle">
+              {data.kpis && (
+                <>
+                  <b>{data.kpis.packets_in_progress}</b> claim packet{data.kpis.packets_in_progress === 1 ? "" : "s"} in progress
+                  <span className="dot">·</span>
+                  <b>{formatINR(data.kpis.total_sum_insured)}</b> sum insured tracked
+                  <span className="dot">·</span>
+                </>
+              )}
+              {(() => {
+                const openCount = data.attention.length;
+                return openCount === 0 ? "All caught up" : <><b>{openCount}</b> item{openCount === 1 ? "" : "s"} need{openCount === 1 ? "s" : ""} attention</>;
+              })()}
             </div>
-          )}
+          </div>
+          <div className="head-actions">
+            <button className="btn" data-testid="quick-upload-document-button" onClick={() => navigate("documents")}><Upload size={15} /> Upload document</button>
+            <button className="btn primary" data-testid="quick-add-policy-button" onClick={() => navigate("policies")}><Plus size={18} /> Add policy</button>
+          </div>
         </section>
 
         {data.onboarding && !data.onboarding.all_done && !data.onboarding.dismissed && (
@@ -647,32 +631,37 @@ function App() {
         <div className="section">
           <div className="section-head-row"><span className="section-title">Claim packets</span><div style={{ display: "flex", gap: 14, alignItems: "center" }}><button className="text-button" style={{ margin: 0 }} data-testid="new-claim-button" onClick={() => setShowNew(true)}><Plus size={14} /> New claim</button><button className="view-all" data-testid="view-all-claims-button" onClick={() => notify("Showing all claims")} style={{ border: 0, background: "transparent", cursor: "pointer" }}>View all →</button></div></div>
           {data.claims.length === 0 ? <p className="empty-hint" data-testid="empty-claims-card">No claims yet. Start one whenever you actually need it.</p> : (
-            <table className="packet-table" data-testid="packet-table">
-              <thead><tr><th>Claim</th><th>Policy</th><th>Packet status</th><th>Documents</th><th>Started</th><th></th></tr></thead>
-              <tbody>
-                {data.claims.map((claim) => {
-                  const policy = (data.policies || []).find(p => p.id === claim.policy_id);
-                  const ready = claim.packet_status === "Ready to submit";
-                  return (
-                    <tr key={claim.id} data-testid={`packet-row-${claim.id}`}>
-                      <td><div className="packet-row-link"><div className="packet-row-icon"><FileText size={14} /></div>{claim.title}</div></td>
-                      <td className="mono">{policy ? policy.policy_number : "—"}</td>
-                      <td><span className={`chip chip-${ready ? "teal" : "amber"}`}>{claim.packet_status || "Not started"}</span></td>
-                      <td className="mono">{claim.documents_attached ?? 0}/{claim.documents_total ?? 0} attached</td>
-                      <td className="mono">{claim.created_at ? claim.created_at.slice(0, 10) : "—"}</td>
-                      <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            <div className="claims-list" data-testid="packet-table">
+              {data.claims.map((claim) => {
+                const policy = (data.policies || []).find(p => p.id === claim.policy_id);
+                const ready = claim.packet_status === "Ready to submit";
+                return (
+                  <div className="claim-card" key={claim.id} data-testid={`packet-row-${claim.id}`}>
+                    <div className="claim-top">
+                      <div>
+                        <p className="claim-name">{claim.title}</p>
+                        <span className="claim-meta">{claim.id}{policy ? ` · ${policy.insurer_name}` : ""} · {claim.type} · Started {claim.created_at ? claim.created_at.slice(0, 10) : "—"}</span>
+                      </div>
+                      <span className={`claim-status ${ready ? "ok" : "watch"}`}>{claim.packet_status || "Not started"}</span>
+                    </div>
+                    <div className="claim-bottom-row">
+                      <span className="claim-doc-count">{claim.documents_attached ?? 0}/{claim.documents_total ?? 0} documents attached</span>
+                      <div style={{ display: "flex", gap: 6 }}>
                         <button className="packet-action" data-testid={`open-claim-${claim.id}`} onClick={() => openClaim(claim.id)}>{ready ? "Download packet" : "Continue"}</button>
                         {canEdit && (
                           <button className="icon-button" aria-label="Remove claim" data-testid={`remove-claim-${claim.id}`} onClick={() => deleteClaim(claim)}>
                             <Trash2 size={14} />
                           </button>
                         )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      </div>
+                    </div>
+                    {claim.regulatory_note && (
+                      <div className="claim-reg-note" data-testid={`claim-reg-note-${claim.id}`}>{claim.regulatory_note}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
         </>}

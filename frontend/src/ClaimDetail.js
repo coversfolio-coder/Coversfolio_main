@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import client, { API, apiError } from "@/api";
 import {
   X, FileText, MessageSquare, IndianRupee, AlertTriangle,
@@ -41,6 +41,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   // needed once, by the person themselves, to copy onto the paper/PDF form.
   // Kept in component state only: never sent to the backend, cleared on reload.
   const [bankForm, setBankForm] = useState({ tpa_membership_id: "", pan_number: "", bank_account_holder: "", bank_account_number: "", bank_name_branch: "", cheque_payable_name: "", ifsc_code: "" });
+  const [activeSheetSection, setActiveSheetSection] = useState(null);
 
   const load = async () => {
     try {
@@ -74,7 +75,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
     } catch (err) { notify(apiError(err), true); onClose(); }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [claimId]);
+  useEffect(() => { setActiveSheetSection(null); load(); }, [claimId]);
 
   const refresh = async () => { await load(); onChange && onChange(); };
 
@@ -435,77 +436,88 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                     </div>
                   </div>
 
-                  {claimForm.cheat_sheet && (
-                    <div className="cf-card" data-testid="cheat-sheet">
-                      <div className="cf-card-head">
-                        <h3>Fill-in cheat sheet</h3>
-                        <p>Laid out section-by-section to match a standard reimbursement claim form (e.g. Medi Assist / TPA format) - so filling in the paper or PDF form is copying, not hunting through a shoebox of documents.</p>
+                  {claimForm.cheat_sheet && (() => {
+                    const allSections = [
+                      ...claimForm.cheat_sheet,
+                      ...(claim.type === "Reimbursement" ? [{ section: "G", title: "Details of primary insured's bank account", isBankSection: true }] : []),
+                    ];
+                    const current = allSections.find((s) => s.section === activeSheetSection) || allSections[0];
+                    return (
+                      <div className="sheet-wrap" data-testid="cheat-sheet">
+                        <div className="rail">
+                          {allSections.map((s) => (
+                            <button
+                              key={s.section} type="button" className={`rail-letter ${s.section === current.section ? "current" : ""}`}
+                              onClick={() => setActiveSheetSection(s.section)} data-testid={`cheat-sheet-rail-${s.section}`} aria-label={`Section ${s.section}`}
+                            >
+                              {s.section}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="sheet-body">
+                          <div className="sheet-head">
+                            <h2>Section {current.section} — {current.title}</h2>
+                          </div>
+                          {current.isBankSection ? (
+                            <>
+                              <p className="sheet-sub">Typed here only to lay it out for you to copy - this stays in your browser for this session only. Coversfolio never saves or transmits your bank/PAN details.</p>
+                              <div className="row-2">
+                                <label style={{ fontSize: 11 }}>TPA / Company membership ID<input value={bankForm.tpa_membership_id} onChange={(e) => setBankForm({ ...bankForm, tpa_membership_id: e.target.value })} data-testid="bank-tpa-id-input" /></label>
+                                <label style={{ fontSize: 11 }}>PAN<input value={bankForm.pan_number} onChange={(e) => setBankForm({ ...bankForm, pan_number: e.target.value.toUpperCase() })} maxLength={10} data-testid="bank-pan-input" /></label>
+                              </div>
+                              <div className="row-2">
+                                <label style={{ fontSize: 11 }}>Account holder name<input value={bankForm.bank_account_holder} onChange={(e) => setBankForm({ ...bankForm, bank_account_holder: e.target.value })} data-testid="bank-holder-input" /></label>
+                                <label style={{ fontSize: 11 }}>Account number<input value={bankForm.bank_account_number} onChange={(e) => setBankForm({ ...bankForm, bank_account_number: e.target.value })} data-testid="bank-account-number-input" /></label>
+                              </div>
+                              <div className="row-2">
+                                <label style={{ fontSize: 11 }}>Bank name and branch<input value={bankForm.bank_name_branch} onChange={(e) => setBankForm({ ...bankForm, bank_name_branch: e.target.value })} data-testid="bank-name-branch-input" /></label>
+                                <label style={{ fontSize: 11 }}>IFSC code<input value={bankForm.ifsc_code} onChange={(e) => setBankForm({ ...bankForm, ifsc_code: e.target.value.toUpperCase() })} maxLength={11} data-testid="bank-ifsc-input" /></label>
+                              </div>
+                              <label style={{ fontSize: 11 }}>Cheque / DD payable to<input value={bankForm.cheque_payable_name} onChange={(e) => setBankForm({ ...bankForm, cheque_payable_name: e.target.value })} data-testid="bank-cheque-payable-input" /></label>
+                            </>
+                          ) : (
+                            <>
+                              <p className="sheet-sub">Copy these values directly onto the insurer's paper or PDF form, field for field.</p>
+                              {current.fields && (
+                                <div className="field-grid">
+                                  {current.fields.map((f) => {
+                                    const filled = f.value !== null && f.value !== undefined && f.value !== "";
+                                    return (
+                                      <div className="field" key={f.label}>
+                                        <span className="f-label">{f.label}</span>
+                                        <span className={`f-value ${filled ? "" : "empty"}`}>{filled ? String(f.value) : "Pending"}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              {current.bills && (
+                                current.bills.length === 0 ? (
+                                  <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>No bills with an amount logged yet - add bill amounts when uploading documents in the Documents page.</p>
+                                ) : (
+                                  <table style={{ width: "100%", marginTop: 8, fontSize: 11, borderCollapse: "collapse" }}>
+                                    <thead><tr style={{ textAlign: "left", color: "var(--muted)" }}><th style={{ paddingBottom: 4 }}>Sl.</th><th>Document</th><th>Towards</th><th>Bill date</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
+                                    <tbody>
+                                      {current.bills.map((b, i) => (
+                                        <tr key={i} style={{ borderTop: "1px dashed var(--line-soft)" }}>
+                                          <td style={{ padding: "4px 0" }}>{i + 1}</td>
+                                          <td>{b.filename}</td>
+                                          <td>{b.towards}</td>
+                                          <td>{b.bill_date || "—"}</td>
+                                          <td style={{ textAlign: "right" }}>{inr(b.amount)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )
+                              )}
+                              {current.note && <p style={{ fontSize: 10, color: "var(--faint)", marginTop: 12, fontStyle: "italic" }}>{current.note}</p>}
+                            </>
+                          )}
+                        </div>
                       </div>
-
-                      {claimForm.cheat_sheet.map((section) => (
-                        <div key={section.section} style={{ marginBottom: 18 }} data-testid={`cheat-sheet-section-${section.section}`}>
-                          <p style={{ margin: "0 0 8px" }}><span className="cf-section-badge">Section {section.section}</span><strong style={{ fontSize: 12 }}>{section.title}</strong></p>
-                          {section.fields && (
-                            <div className="cf-cheat-table">
-                              <div className="cf-head">Form field</div><div className="cf-head">Value</div><div className="cf-head">Status</div>
-                              {section.fields.map((f) => {
-                                const filled = f.value !== null && f.value !== undefined && f.value !== "";
-                                return (
-                                  <Fragment key={f.label}>
-                                    <div>{f.label}</div>
-                                    <div style={{ fontWeight: filled ? 600 : 400 }}>{filled ? String(f.value) : "—"}</div>
-                                    <div className={filled ? "cf-filled" : "cf-missing"}>{filled ? "Filled in" : "Needs input"}</div>
-                                  </Fragment>
-                                );
-                              })}
-                            </div>
-                          )}
-                          {section.bills && (
-                            section.bills.length === 0 ? (
-                              <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>No bills with an amount logged yet - add bill amounts when uploading documents in the Documents page.</p>
-                            ) : (
-                              <table style={{ width: "100%", marginTop: 8, fontSize: 11, borderCollapse: "collapse" }}>
-                                <thead><tr style={{ textAlign: "left", color: "var(--muted)" }}><th style={{ paddingBottom: 4 }}>Sl.</th><th>Document</th><th>Towards</th><th>Bill date</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
-                                <tbody>
-                                  {section.bills.map((b, i) => (
-                                    <tr key={i} style={{ borderTop: "1px dashed var(--line)" }}>
-                                      <td style={{ padding: "4px 0" }}>{i + 1}</td>
-                                      <td>{b.filename}</td>
-                                      <td>{b.towards}</td>
-                                      <td>{b.bill_date || "—"}</td>
-                                      <td style={{ textAlign: "right" }}>{inr(b.amount)}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            )
-                          )}
-                          {section.note && <p style={{ fontSize: 10, color: "var(--muted)", marginTop: 8, fontStyle: "italic" }}>{section.note}</p>}
-                        </div>
-                      ))}
-
-                      {claim.type === "Reimbursement" && (
-                        <div>
-                          <p style={{ margin: "0 0 8px" }}><span className="cf-section-badge">Section G</span><strong style={{ fontSize: 12 }}>Details of primary insured's bank account</strong></p>
-                          <div className="cf-notice" style={{ marginBottom: 12 }}>
-                            Typed here only to lay it out for you to copy - this stays in your browser for this session only. Coversfolio never saves or transmits your bank/PAN details.
-                          </div>
-                          <div className="row-2">
-                            <label style={{ fontSize: 11 }}>TPA / Company membership ID<input value={bankForm.tpa_membership_id} onChange={(e) => setBankForm({ ...bankForm, tpa_membership_id: e.target.value })} data-testid="bank-tpa-id-input" /></label>
-                            <label style={{ fontSize: 11 }}>PAN<input value={bankForm.pan_number} onChange={(e) => setBankForm({ ...bankForm, pan_number: e.target.value.toUpperCase() })} maxLength={10} data-testid="bank-pan-input" /></label>
-                          </div>
-                          <div className="row-2">
-                            <label style={{ fontSize: 11 }}>Account holder name<input value={bankForm.bank_account_holder} onChange={(e) => setBankForm({ ...bankForm, bank_account_holder: e.target.value })} data-testid="bank-holder-input" /></label>
-                            <label style={{ fontSize: 11 }}>Account number<input value={bankForm.bank_account_number} onChange={(e) => setBankForm({ ...bankForm, bank_account_number: e.target.value })} data-testid="bank-account-number-input" /></label>
-                          </div>
-                          <div className="row-2">
-                            <label style={{ fontSize: 11 }}>Bank name and branch<input value={bankForm.bank_name_branch} onChange={(e) => setBankForm({ ...bankForm, bank_name_branch: e.target.value })} data-testid="bank-name-branch-input" /></label>
-                            <label style={{ fontSize: 11 }}>IFSC code<input value={bankForm.ifsc_code} onChange={(e) => setBankForm({ ...bankForm, ifsc_code: e.target.value.toUpperCase() })} maxLength={11} data-testid="bank-ifsc-input" /></label>
-                          </div>
-                          <label style={{ fontSize: 11 }}>Cheque / DD payable to<input value={bankForm.cheque_payable_name} onChange={(e) => setBankForm({ ...bankForm, cheque_payable_name: e.target.value })} data-testid="bank-cheque-payable-input" /></label>
-                        </div>
-                      )}
-                    </div>
+                    );
+                  })()}
                   )}
 
                   {claimForm.know_your_rights?.length > 0 && (

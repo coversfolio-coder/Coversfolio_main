@@ -1269,6 +1269,18 @@ async def admin_stats(user: dict = Depends(current_user)):
     }
 
 
+def regulatory_note_for_claim_type(claim_type: str) -> str:
+    """One short, static reference line per claim type - the headline fact a
+    person would want visible at a glance, not the full Know Your Rights list.
+    Sourced from the same verified SLA_DEFINITIONS used elsewhere, so this can
+    never drift out of sync with the fuller reference panel."""
+    if claim_type == "Cashless":
+        return "IRDAI: cashless pre-authorization must be decided within 1 hour of a complete request."
+    if claim_type == "Reimbursement":
+        return "IRDAI: reimbursement settled within 30 days of receiving all documents (45 if investigation is needed), or 2% interest above the bank rate is owed."
+    return ""
+
+
 @api_router.get("/dashboard")
 async def get_dashboard(user: dict = Depends(current_user)):
     await audit(user, "workspace_viewed", "Opened the claim workspace")
@@ -1355,6 +1367,7 @@ async def get_dashboard(user: dict = Depends(current_user)):
         claim["documents_attached"] = attached
         claim["documents_total"] = total_sections
         claim["progress"] = compute_claim_progress(claim, attached, total_sections)
+        claim["regulatory_note"] = regulatory_note_for_claim_type(claim.get("type"))
         if packet_status != "Ready to submit" and claim.get("status") in ("in_progress", "reopened", "appealed"):
             packets_in_progress += 1
     for claim in full_claims:
