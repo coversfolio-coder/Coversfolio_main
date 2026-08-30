@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import client, { apiError } from "@/api";
 import {
   AlertTriangle, Bell, BookOpen, Check, CheckCircle2, ChevronRight, ClipboardCheck,
-  FileText, Home, LayoutDashboard, LifeBuoy, LogOut, Menu, Plus, Search, Settings, ShieldCheck,
-  Stethoscope, Trash2, Upload, User as UserIcon, Users, X, UserPlus, UserX, History
+  FileText, Home, LayoutDashboard, LifeBuoy, LogOut, Plus, Search, Settings, ShieldCheck,
+  Stethoscope, Trash2, Upload, User as UserIcon, X, UserPlus, UserX, History
 } from "lucide-react";
 import "@/App.css";
 import "@/Auth.css";
@@ -75,8 +75,182 @@ function GoogleSignInButton({ onAuthenticated, onError, consentGiven }) {
   return <div className="google-button-mount" ref={buttonRef} data-testid="google-signin-button" />;
 }
 
-function AuthScreen({ onAuthenticated }) {
-  const [mode, setMode] = useState("login"); // "login" | "register" | "forgot" | "reset"
+function FAQItem({ question, answer, testId }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="faq-item" data-testid={testId}>
+      <button type="button" className="faq-question" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span>{question}</span>
+        <span className="faq-toggle">{open ? "−" : "+"}</span>
+      </button>
+      {open && <p className="faq-answer">{answer}</p>}
+    </div>
+  );
+}
+
+function LandingPage({ onGetStarted, onLogin }) {
+  return (
+    <div className="landing" data-testid="landing-page">
+      <header className="landing-topbar">
+        <div className="wordmark"><img className="brand-icon-sm" src="/brand-icon.png" alt="Coversfolio" /><span>Coversfolio</span></div>
+        <div className="landing-topbar-actions">
+          <button className="btn" onClick={onLogin} data-testid="landing-login-button">Log in</button>
+          <button className="btn primary" onClick={onGetStarted} data-testid="landing-get-started-button">Get started free</button>
+        </div>
+      </header>
+
+      <section className="landing-hero">
+        <p className="landing-eyebrow">FOR INDIAN HOUSEHOLDS</p>
+        <h1>Your claim shouldn't get rejected<br />over a missing form.</h1>
+        <p className="landing-lede">
+          Coversfolio organizes your insurance policies and compiles exactly what your insurer needs to process a claim -
+          so paperwork isn't what costs your family the payout you're owed.
+        </p>
+        <div className="landing-hero-actions">
+          <button className="btn primary large" onClick={onGetStarted} data-testid="landing-hero-cta">Get started free</button>
+          <button className="btn large" onClick={onLogin}>Log in</button>
+        </div>
+      </section>
+
+      <section className="landing-stats">
+        <div className="landing-stat">
+          <strong>11%</strong>
+          <span>of health insurance claims were disallowed by insurers in FY24, per IRDAI's own Annual Report.</span>
+        </div>
+        <div className="landing-stat">
+          <strong>32%</strong>
+          <span>of reimbursement rejections trace back to incomplete or illegible discharge summaries - a paperwork problem, not a medical one.</span>
+        </div>
+        <div className="landing-stat">
+          <strong>₹26,000cr</strong>
+          <span>in health claims were held back by insurers that year alone, industry-wide.</span>
+        </div>
+        <div className="landing-stat">
+          <strong>3.7%</strong>
+          <span>is India's insurance penetration rate - most households are underinsured for what a real hospitalization costs.</span>
+        </div>
+      </section>
+
+      <section className="landing-features">
+        <p className="landing-section-label">WHAT WE ACTUALLY DO</p>
+        <div className="landing-feature-grid">
+          <div className="landing-feature">
+            <BookOpen size={19} />
+            <strong>One place for every policy</strong>
+            <p>Sum insured, renewal dates, and who's covered - tracked automatically, no more digging through email.</p>
+          </div>
+          <div className="landing-feature">
+            <Search size={19} />
+            <strong>Plain-language policy analysis</strong>
+            <p>Maternity cover, waiting periods, and exclusions explained - not buried in 40 pages of fine print.</p>
+          </div>
+          <div className="landing-feature">
+            <FileText size={19} />
+            <strong>A real claim compiler</strong>
+            <p>Bills sorted automatically, a field-by-field cheat sheet matching the insurer's own form, and the right checklist for Cashless or Reimbursement.</p>
+          </div>
+          <div className="landing-feature">
+            <ShieldCheck size={19} />
+            <strong>Know your rights, verified</strong>
+            <p>IRDAI mandates a 1-hour cashless decision and a 30-day reimbursement settlement, with 2% interest owed if insurers miss it. We show you the real rule, cited.</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-privacy">
+        <ShieldCheck size={22} />
+        <div>
+          <strong>Private by design.</strong>
+          <p>Your documents stay yours. We compile your claim file - we don't sell insurance, settle claims, or act as your insurer's intermediary, and we never sell your data.</p>
+        </div>
+      </section>
+
+      <section className="landing-faq">
+        <p className="landing-section-label">FREQUENTLY ASKED QUESTIONS</p>
+
+        <p className="faq-group-label">About Coversfolio</p>
+        <div className="faq-list">
+          <FAQItem
+            testId="faq-free"
+            question="Is Coversfolio free to use?"
+            answer="Yes. Tracking policies, storing documents, and compiling your claim checklist and cheat sheet are free. We're not selling insurance or taking a commission on anything you do here."
+          />
+          <FAQItem
+            testId="faq-sell-insurance"
+            question="Does Coversfolio sell insurance or connect me with an insurer?"
+            answer="No. We don't sell policies, act as a broker or agent, or get paid by any insurer. We organize what you already have and help you compile the paperwork - the insurer relationship stays entirely between you and your provider."
+          />
+          <FAQItem
+            testId="faq-file-claim"
+            question="Does Coversfolio file the claim for me?"
+            answer="No - and that's deliberate. We compile your documents, sort your bills, and fill in a field-by-field reference matching your insurer's own form. You (or your hospital's TPA desk) still submit the actual claim - we never contact your insurer on your behalf."
+          />
+          <FAQItem
+            testId="faq-data-safe"
+            question="Is my data safe and private?"
+            answer="Your documents and policy details are only visible to the household members you explicitly invite. We don't sell or share your data with insurers, advertisers, or anyone else."
+          />
+          <FAQItem
+            testId="faq-family"
+            question="Can my whole family use one account?"
+            answer="Yes. You can invite household members to help prepare a claim together, or add a read-only agent (like someone helping an elderly parent) who can view but not change anything."
+          />
+        </div>
+
+        <p className="faq-group-label">About your insurance</p>
+        <div className="faq-list">
+          <FAQItem
+            testId="faq-cashless-vs-reimbursement"
+            question="What's the difference between Cashless and Reimbursement claims?"
+            answer="Cashless means your insurer settles directly with the hospital (usually at a network hospital) - you don't pay upfront. Reimbursement means you pay the hospital yourself first, then claim the money back from your insurer afterward using your bills and receipts."
+          />
+          <FAQItem
+            testId="faq-cashless-timeline"
+            question="How long does an insurer have to approve a cashless request?"
+            answer="Under IRDAI's Master Circular on Health Insurance Business (29 May 2024), insurers must decide on a complete cashless pre-authorization request within 1 hour, and give final discharge authorization within 3 hours."
+          />
+          <FAQItem
+            testId="faq-reimbursement-timeline"
+            question="How long does a reimbursement claim take to settle?"
+            answer="Per IRDA's Protection of Policyholders' Interests Regulations, insurers must pay or give written reasons for disputing a claim within 30 days of receiving all your documents - up to 45 days if they need to investigate. If they're late, they owe you interest at 2% above the applicable bank rate."
+          />
+          <FAQItem
+            testId="faq-repeat-document-requests"
+            question="Can an insurer keep asking me for more documents, again and again?"
+            answer="They're not supposed to. The same regulations require insurers to ask for everything they need within 15 days of receiving your claim, in one go - not through several separate rounds of requests."
+          />
+          <FAQItem
+            testId="faq-waiting-period"
+            question="What is a waiting period?"
+            answer="A length of time after your policy starts during which certain conditions aren't covered yet - commonly a shorter period for the policy overall, and a longer one (often a few years) specifically for pre-existing diseases. The exact duration varies by insurer and policy, so always check your own policy document."
+          />
+          <FAQItem
+            testId="faq-sublimit"
+            question="What is a room rent sub-limit, and why does it matter?"
+            answer="Many policies cap how much they'll pay per day for your hospital room. If you choose a room above that cap, insurers often reduce the rest of the bill proportionally too - not just the room charge - which is one of the most common reasons a claim payout ends up smaller than expected."
+          />
+          <FAQItem
+            testId="faq-documents-needed"
+            question="What documents does a typical claim need?"
+            answer="Usually your policy document, ID proof, hospital discharge summary, and itemized bills - with reimbursement claims also needing payment receipts. The exact list varies by insurer and claim type, which is exactly what Coversfolio's checklist is built to sort out for you."
+          />
+        </div>
+      </section>
+
+      <section className="landing-cta">
+        <h2>Ready to get your paperwork right the first time?</h2>
+        <button className="btn primary large" onClick={onGetStarted} data-testid="landing-footer-cta">Get started free</button>
+      </section>
+
+      <footer className="landing-footer">
+        <span>Sources: IRDAI Annual Report (via Business Standard); industry claim-rejection analyses, 2025-26.</span>
+      </footer>
+    </div>
+  );
+}
+
+function AuthScreen({ onAuthenticated, initialMode = "login", onBack }) {
+  const [mode, setMode] = useState(initialMode); // "login" | "register" | "forgot" | "reset"
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState("");
@@ -136,6 +310,7 @@ function AuthScreen({ onAuthenticated }) {
   return (
     <div className="auth-shell" data-testid="auth-screen">
       <div className="auth-panel">
+        {onBack && <button type="button" className="auth-back-link" onClick={onBack} data-testid="auth-back-button">← Back to home</button>}
         <div className="brand auth-brand">
           <img className="brand-icon" src="/brand-icon.png" alt="Coversfolio" />
           <span><span className="brand-covers">Covers</span><span className="brand-folio">folio</span></span>
@@ -309,6 +484,7 @@ function AccountMenu({ user, onManageAccess, onSignOut, onSupport, onOpenAdminSt
             <button role="menuitem" onClick={() => { setOpen(false); onSupport(); }} data-testid="account-menu-support"><LifeBuoy size={15} /><span>Support centre</span></button>
             <button role="menuitem" className="danger" onClick={() => { setOpen(false); onSignOut(); }} data-testid="account-menu-signout"><LogOut size={15} /><span>Sign out</span></button>
           </div>
+          <div className="account-menu-privacy" data-testid="privacy-note"><ShieldCheck size={14} /><span>Your files stay private - encrypted and only shared by you</span></div>
         </div>
       )}
     </div>
@@ -319,6 +495,7 @@ function App() {
   const [data, setData] = useState(fallback);
   const [user, setUser] = useState(null);
   const [authChecking, setAuthChecking] = useState(true);
+  const [authEntryMode, setAuthEntryMode] = useState(() => (new URLSearchParams(window.location.search).get("token") ? "login" : null));
   const [active, setActive] = useState("workspace");
   const [policyPrefill, setPolicyPrefill] = useState(null);
   const [showNew, setShowNew] = useState(false);
@@ -441,19 +618,25 @@ function App() {
   const revokeInvite = async (id) => { try { await client.delete(`/household/invites/${id}`); setMembers({ ...members, invites: members.invites.filter(item => item.id !== id) }); notify("Invitation revoked"); } catch (err) { notify(apiError(err), true); } };
 
   if (authChecking) return <div className="auth-loading" data-testid="auth-loading"><ShieldCheck size={24} />Loading your secure workspace…</div>;
-  if (!user) return <AuthScreen onAuthenticated={setUser} />;
+  if (!user) {
+    if (!authEntryMode) return <LandingPage onGetStarted={() => setAuthEntryMode("register")} onLogin={() => setAuthEntryMode("login")} />;
+    return <AuthScreen onAuthenticated={setUser} initialMode={authEntryMode} onBack={() => setAuthEntryMode(null)} />;
+  }
 
   return <div className="app-shell">
-    <aside className="sidebar" data-testid="primary-sidebar">
-      <div className="brand" data-testid="brand-mark"><img className="brand-icon" src="/brand-icon.png" alt="Coversfolio" /><span><span className="brand-covers">Covers</span><span className="brand-folio">folio</span></span></div>
-      <div className="household-switcher" data-testid="household-switcher"><span className="avatar">M</span><span><small>HOUSEHOLD</small><strong>{data.household.name}</strong></span><ChevronRight size={15} /></div>
-      <nav className="nav-list" data-testid="main-navigation">{navItems.map(({ label, icon: Icon, id }) => <button key={id} data-testid={`nav-${id}`} className={active === id ? "nav-item active" : "nav-item"} onClick={() => navigate(id)}><Icon size={18} /><span>{label}</span></button>)}<button className="nav-item" data-testid="nav-household" onClick={openMembers}><Users size={18} /><span>Members</span></button></nav>
-      <div className="sidebar-bottom"><button className="nav-item" data-testid="nav-support" onClick={() => notify("Support centre is ready for your questions")}><LifeBuoy size={18} /><span>Support centre</span></button><div className="privacy-note" data-testid="privacy-note"><ShieldCheck size={17} /><span><strong>Your files stay private</strong><small>Encrypted and only shared by you</small></span></div><button className="profile" data-testid="sidebar-profile" onClick={() => document.querySelector('[data-testid="account-menu-trigger"]')?.click()}><Avatar user={user} /><span><strong>{user.name}</strong><small>{user.role === "owner" ? "Household owner" : user.role === "agent" ? "Read-only agent" : "Household member"}</small></span><Menu size={16} /></button></div>
-    </aside>
     <main className="main-content">
       <header className="topbar">
-        <div className="crumbs" data-testid="page-breadcrumb"><span>My household</span><ChevronRight size={14} /><strong>{navItems.find(n => n.id === active)?.label || "Claim workspace"}</strong></div>
-        <div className="top-actions">
+        <div className="wordmark" data-testid="brand-mark">
+          <img className="brand-icon-sm" src="/brand-icon.png" alt="Coversfolio" />
+          <span>Coversfolio</span>
+        </div>
+        <nav className="nav" data-testid="main-navigation">
+          {navItems.map(({ label, id }) => (
+            <a key={id} data-testid={`nav-${id}`} className={active === id ? "active" : ""} onClick={() => navigate(id)}>{label}</a>
+          ))}
+          <a data-testid="nav-household" onClick={openMembers}>Members</a>
+        </nav>
+        <div className="nav-right">
           <div style={{ position: "relative" }}>
             <button className="icon-button" aria-label="Search" data-testid="search-button" onClick={() => { setSearchOpen((v) => !v); setNotifOpen(false); }}><Search size={19} /></button>
             {searchOpen && (
@@ -532,6 +715,7 @@ function App() {
             )}
           </div>
 
+          <span className="household-pill" data-testid="household-switcher">{data.household.name}</span>
           <AccountMenu user={user} onManageAccess={openMembers} onSignOut={signOut} onSupport={() => notify("Support centre is ready for your questions")} onOpenAdminStats={openAdminStats} />
         </div>
       </header>
