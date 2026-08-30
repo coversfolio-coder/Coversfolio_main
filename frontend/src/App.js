@@ -203,7 +203,6 @@ function LandingPage({ onGetStarted, onLogin }) {
         </p>
         <div className="landing-hero-actions">
           <button className="btn primary large" onClick={onGetStarted} data-testid="landing-hero-cta">Get started free</button>
-          <button className="btn large" onClick={onLogin}>Log in</button>
         </div>
         <HeroIllustration />
       </section>
