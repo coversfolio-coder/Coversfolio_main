@@ -32,6 +32,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from motor.motor_asyncio import AsyncIOMotorClient
+import ocr as ocr_module
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from pypdf import PdfReader
 import pdfplumber
@@ -206,6 +207,13 @@ ALLOWED_UPLOAD_TYPES = {
     "application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic",
     "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+
+# Narrower than ALLOWED_UPLOAD_TYPES on purpose: Word docs already have a real
+# extractable text layer via extract_document_text() and were never meant to
+# go through image-based OCR - neither Gemini vision nor Tesseract can usefully
+# process raw .docx bytes, so offering them here would just produce a
+# confusing failure instead of a clear "wrong tool for this file type" message.
+OCR_SUPPORTED_TYPES = {"application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic"}
 
 # Recognized document categories. Kept as a fixed, small list (mirrored in the
 # frontend dropdown) rather than free text, so the Documents page can group
@@ -1639,6 +1647,68 @@ async def extract_policy_document(file: UploadFile = File(...), user: dict = Dep
             fields["insured_people"] = insured_people
     await audit(user, "policy_document_scanned", f"Scanned '{file.filename}' for policy details")
     return fields
+
+
+@api_router.post("/ocr/extract")
+async def ocr_extract(file: UploadFile = File(...), user: dict = Depends(current_user)):
+    """General-purpose text extraction from any supported image or PDF -
+    deliberately not tied to policies, claims, evidence, or any other specific
+    feature. Any part of the app (current or future) that needs 'read the text
+    out of this file' can call this directly."""
+    if file.content_type not in OCR_SUPPORTED_TYPES:
+        raise HTTPException(status_code=415, detail="Upload a PDF or a JPG/PNG/WEBP/HEIC image")
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File is too large. Maximum size is {MAX_UPLOAD_BYTES // (1024*1024)}MB")
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+
+    existing_text_layer = None
+    if file.content_type == "application/pdf":
+        try:
+            existing_text_layer = extract_document_text(file.filename or "", file.content_type, contents)
+        except Exception:
+            existing_text_layer = None
+
+    try:
+        result = await asyncio.to_thread(
+            ocr_module.extract_text, file.filename or "", file.content_type, contents,
+            gemini_api_key=GEMINI_API_KEY, gemini_model=GEMINI_MODEL, existing_text_layer=existing_text_layer,
+        )
+    except ocr_module.OCRError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    await audit(user, "ocr_extracted", f"Extracted text from '{file.filename}' via {result['method']}")
+    return result
+
+
+@api_router.post("/documents/{document_id}/ocr")
+async def ocr_existing_document(document_id: str, user: dict = Depends(current_user)):
+    """Same extraction, but for a document already sitting in the household's
+    Documents vault - and the result is saved back onto the document record,
+    so it only ever needs to be OCR'd once, and so a future full-text search
+    feature has real content to search, not just filenames."""
+    _require_writer(user)
+    contents, doc = await _load_document_for_extraction(document_id, user, OCR_SUPPORTED_TYPES)
+
+    existing_text_layer = None
+    if doc["content_type"] == "application/pdf":
+        try:
+            existing_text_layer = extract_document_text(doc["filename"], doc["content_type"], contents)
+        except Exception:
+            existing_text_layer = None
+
+    try:
+        result = await asyncio.to_thread(
+            ocr_module.extract_text, doc["filename"], doc["content_type"], contents,
+            gemini_api_key=GEMINI_API_KEY, gemini_model=GEMINI_MODEL, existing_text_layer=existing_text_layer,
+        )
+    except ocr_module.OCRError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    await db.documents.update_one({"id": document_id}, {"$set": {"extracted_text": result["text"], "extracted_text_method": result["method"]}})
+    await audit(user, "ocr_extracted", f"Extracted text from '{doc['filename']}' via {result['method']}")
+    return result
 
 
 async def _load_document_for_extraction(document_id: str, user: dict, allowed_types: set[str]) -> tuple[bytes, dict]:

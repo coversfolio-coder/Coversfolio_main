@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import client, { API, apiError } from "@/api";
-import { Camera, Download, FileText, Plus, Trash2, Upload, X } from "lucide-react";
+import { Camera, Download, FileText, Plus, ScanText, Trash2, Upload, X } from "lucide-react";
 
 const emptyForm = { category: "", item_name: "", description: "", purchase_date: "", value: "" };
 
@@ -72,6 +72,36 @@ export default function EvidencePage({ canEdit, notify }) {
     } catch (err) { notify(apiError(err), true); } finally { setUploadingFor(null); }
   };
 
+  const [ocrBusyId, setOcrBusyId] = useState(null);
+  const [ocrResults, setOcrResults] = useState({}); // { [docId]: { text, method } }
+
+  const runOcr = async (docId) => {
+    setOcrBusyId(docId);
+    try {
+      const res = await client.post(`/documents/${docId}/ocr`);
+      setOcrResults((prev) => ({ ...prev, [docId]: res.data }));
+    } catch (err) { notify(apiError(err), true); } finally { setOcrBusyId(null); }
+  };
+
+  // A light, best-effort read of a rupee figure from OCR'd receipt text - lets
+  // the person one-click-fill the item's value instead of retyping a number
+  // that's already right there on the receipt. Never overwrites silently; the
+  // person still clicks to accept it.
+  const findRupeeAmount = (text) => {
+    const matches = [...text.matchAll(/(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/gi)];
+    if (matches.length === 0) return null;
+    const amounts = matches.map((m) => parseFloat(m[1].replace(/,/g, ""))).filter((n) => !isNaN(n) && n > 0);
+    return amounts.length > 0 ? Math.max(...amounts) : null;
+  };
+
+  const useAmountAsValue = async (itemId, amount) => {
+    try {
+      await client.put(`/evidence/${itemId}`, { value: amount });
+      notify(`Value updated to ₹${amount.toLocaleString("en-IN")}`);
+      load();
+    } catch (err) { notify(apiError(err), true); }
+  };
+
   const removeDocument = async (docId) => {
     try { await client.delete(`/documents/${docId}`); notify("Removed"); load(); }
     catch (err) { notify(apiError(err), true); }
@@ -115,12 +145,36 @@ export default function EvidencePage({ canEdit, notify }) {
               {(documents[item.id] || []).length > 0 && (
                 <div className="evidence-bills" data-testid={`evidence-bills-${item.id}`}>
                   {documents[item.id].map((doc) => (
-                    <div className="evidence-bill-row" key={doc.id} data-testid={`evidence-bill-${doc.id}`}>
-                      <FileText size={13} />
-                      <span className="evidence-bill-name">{doc.filename}</span>
-                      <small>{fileSize(doc.size)}</small>
-                      <button className="icon-button" aria-label="Download" data-testid={`download-evidence-bill-${doc.id}`} onClick={() => download(doc)}><Download size={13} /></button>
-                      {canEdit && <button className="icon-button" aria-label="Remove bill copy" data-testid={`remove-evidence-bill-${doc.id}`} onClick={() => removeDocument(doc.id)}><Trash2 size={13} /></button>}
+                    <div key={doc.id}>
+                      <div className="evidence-bill-row" data-testid={`evidence-bill-${doc.id}`}>
+                        <FileText size={13} />
+                        <span className="evidence-bill-name">{doc.filename}</span>
+                        <small>{fileSize(doc.size)}</small>
+                        <button className="icon-button" aria-label="Extract text" disabled={ocrBusyId === doc.id} data-testid={`ocr-evidence-bill-${doc.id}`} onClick={() => runOcr(doc.id)}><ScanText size={13} className={ocrBusyId === doc.id ? "spin-icon" : ""} /></button>
+                        <button className="icon-button" aria-label="Download" data-testid={`download-evidence-bill-${doc.id}`} onClick={() => download(doc)}><Download size={13} /></button>
+                        {canEdit && <button className="icon-button" aria-label="Remove bill copy" data-testid={`remove-evidence-bill-${doc.id}`} onClick={() => removeDocument(doc.id)}><Trash2 size={13} /></button>}
+                      </div>
+                      {ocrResults[doc.id] && (() => {
+                        const detectedAmount = findRupeeAmount(ocrResults[doc.id].text);
+                        return (
+                          <div className="empty-hint" data-testid={`ocr-result-${doc.id}`} style={{ margin: "6px 0 10px", whiteSpace: "pre-wrap", fontSize: 11.5, maxHeight: 180, overflowY: "auto" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+                              <strong style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>
+                                Extracted text {ocrResults[doc.id].method === "gemini_vision" ? "(via AI)" : ocrResults[doc.id].method === "tesseract" ? "(via offline OCR)" : "(from file)"}
+                              </strong>
+                              <div style={{ display: "flex", gap: 10 }}>
+                                {canEdit && detectedAmount && (
+                                  <button className="text-button" style={{ padding: 0 }} data-testid={`use-amount-${doc.id}`} onClick={() => useAmountAsValue(item.id, detectedAmount)}>
+                                    Use ₹{detectedAmount.toLocaleString("en-IN")} as value
+                                  </button>
+                                )}
+                                <button className="text-button" style={{ padding: 0 }} onClick={() => setOcrResults((prev) => { const next = { ...prev }; delete next[doc.id]; return next; })}>Dismiss</button>
+                              </div>
+                            </div>
+                            {ocrResults[doc.id].text}
+                          </div>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>

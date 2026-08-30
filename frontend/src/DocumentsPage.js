@@ -41,7 +41,17 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
   const [uploadClaimId, setUploadClaimId] = useState("");
   const [billAmount, setBillAmount] = useState("");
   const [billDate, setBillDate] = useState("");
+  const [ocrBusyId, setOcrBusyId] = useState(null);
+  const [ocrResults, setOcrResults] = useState({}); // { [docId]: { text, method } }
   const inputRef = useRef(null);
+
+  const runOcr = async (docId) => {
+    setOcrBusyId(docId);
+    try {
+      const res = await client.post(`/documents/${docId}/ocr`);
+      setOcrResults((prev) => ({ ...prev, [docId]: res.data }));
+    } catch (err) { notify(apiError(err), true); } finally { setOcrBusyId(null); }
+  };
 
   const load = () => {
     client.get("/documents").then((r) => setDocuments(r.data.documents)).catch((err) => notify(apiError(err), true));
@@ -191,9 +201,21 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
                       <strong style={{ display: "block" }}>{doc.filename}</strong>
                       <small>{fileSize(doc.size)} · Uploaded by {doc.uploaded_by_name}</small>
                     </div>
+                    <button className="icon-button" aria-label="Extract text" disabled={ocrBusyId === doc.id} data-testid={`ocr-document-${doc.id}`} onClick={() => runOcr(doc.id)}><FileScan size={15} className={ocrBusyId === doc.id ? "spin-icon" : ""} /></button>
                     <button className="icon-button" aria-label="Download" data-testid={`download-document-${doc.id}`} onClick={() => download(doc)}><Download size={15} /></button>
                     {canEdit && <button className="icon-button" aria-label="Remove document" data-testid={`remove-document-${doc.id}`} onClick={() => remove(doc.id)}><Trash2 size={15} /></button>}
                   </header>
+                  {ocrResults[doc.id] && (
+                    <div className="empty-hint" data-testid={`ocr-result-${doc.id}`} style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 220, overflowY: "auto" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                        <strong style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--muted)" }}>
+                          Extracted text {ocrResults[doc.id].method === "gemini_vision" ? "(via AI)" : ocrResults[doc.id].method === "tesseract" ? "(via offline OCR)" : "(from file)"}
+                        </strong>
+                        <button className="text-button" style={{ padding: 0 }} onClick={() => setOcrResults((prev) => { const next = { ...prev }; delete next[doc.id]; return next; })}>Dismiss</button>
+                      </div>
+                      {ocrResults[doc.id].text}
+                    </div>
+                  )}
                 </article>
               ))}
             </div>
