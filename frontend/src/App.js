@@ -15,6 +15,16 @@ import EvidencePage from "@/EvidencePage";
 import DocumentsPage from "@/DocumentsPage";
 
 
+// Shown instantly while /public/landing-stats loads (or if it fails) - kept
+// identical to the backend's own fallback so there's no visible content swap
+// for most visitors; the backend copy is the one an admin can actually edit.
+const DEFAULT_LANDING_STATS = [
+  { value: "11%", label: "of health insurance claims were disallowed by insurers in FY24, per IRDAI's own Annual Report." },
+  { value: "32%", label: "of reimbursement rejections trace back to incomplete or illegible discharge summaries - a paperwork problem, not a medical one." },
+  { value: "₹26,000cr", label: "in health claims were held back by insurers that year alone, industry-wide." },
+  { value: "3.7%", label: "is India's insurance penetration rate - most households are underinsured for what a real hospitalization costs." },
+];
+
 const navItems = [
   { label: "Claim packets", icon: LayoutDashboard, id: "workspace" },
   { label: "Policies & people", icon: ShieldCheck, id: "policies" },
@@ -88,7 +98,48 @@ function FAQItem({ question, answer, testId }) {
   );
 }
 
+function StatsCarousel({ stats }) {
+  const [index, setIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  useEffect(() => {
+    if (paused || reducedMotion || stats.length <= 1) return;
+    const id = setInterval(() => setIndex((i) => (i + 1) % stats.length), 4500);
+    return () => clearInterval(id);
+  }, [paused, reducedMotion, stats.length]);
+
+  useEffect(() => { setIndex(0); }, [stats]);
+
+  if (stats.length === 0) return null;
+  const current = stats[index];
+
+  return (
+    <div className="stat-flashcard-wrap" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} data-testid="landing-stats-carousel">
+      <div className="stat-flashcard" key={index} data-testid={`landing-stat-${index}`}>
+        <strong>{current.value}</strong>
+        <span>{current.label}</span>
+      </div>
+      {stats.length > 1 && (
+        <div className="stat-flashcard-dots">
+          {stats.map((_, i) => (
+            <button
+              key={i} type="button" className={`stat-flashcard-dot ${i === index ? "active" : ""}`}
+              onClick={() => setIndex(i)} aria-label={`Show stat ${i + 1}`} data-testid={`landing-stat-dot-${i}`}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LandingPage({ onGetStarted, onLogin }) {
+  const [stats, setStats] = useState(DEFAULT_LANDING_STATS);
+  useEffect(() => {
+    client.get("/public/landing-stats").then((r) => { if (r.data.stats?.length > 0) setStats(r.data.stats); }).catch(() => {});
+  }, []);
+
   return (
     <div className="landing" data-testid="landing-page">
       <header className="landing-topbar">
@@ -112,24 +163,7 @@ function LandingPage({ onGetStarted, onLogin }) {
         </div>
       </section>
 
-      <section className="landing-stats">
-        <div className="landing-stat">
-          <strong>11%</strong>
-          <span>of health insurance claims were disallowed by insurers in FY24, per IRDAI's own Annual Report.</span>
-        </div>
-        <div className="landing-stat">
-          <strong>32%</strong>
-          <span>of reimbursement rejections trace back to incomplete or illegible discharge summaries - a paperwork problem, not a medical one.</span>
-        </div>
-        <div className="landing-stat">
-          <strong>₹26,000cr</strong>
-          <span>in health claims were held back by insurers that year alone, industry-wide.</span>
-        </div>
-        <div className="landing-stat">
-          <strong>3.7%</strong>
-          <span>is India's insurance penetration rate - most households are underinsured for what a real hospitalization costs.</span>
-        </div>
-      </section>
+      <StatsCarousel stats={stats} />
 
       <section className="landing-features">
         <p className="landing-section-label">WHAT WE ACTUALLY DO</p>
@@ -599,13 +633,24 @@ function App() {
 
   const [adminStats, setAdminStats] = useState(null);
   const [adminStatsOpen, setAdminStatsOpen] = useState(false);
+  const [landingStatsEdit, setLandingStatsEdit] = useState(null);
+  const [savingLandingStats, setSavingLandingStats] = useState(false);
   const openAdminStats = async () => {
     setAdminStatsOpen(true);
     setAdminStats(null);
     try {
       const res = await client.get("/admin/stats");
       setAdminStats(res.data);
+      const statsRes = await client.get("/public/landing-stats");
+      setLandingStatsEdit(statsRes.data.stats);
     } catch (err) { notify(apiError(err), true); setAdminStatsOpen(false); }
+  };
+  const saveLandingStats = async () => {
+    setSavingLandingStats(true);
+    try {
+      await client.put("/admin/landing-stats", { stats: landingStatsEdit });
+      notify("Landing page stats updated");
+    } catch (err) { notify(apiError(err), true); } finally { setSavingLandingStats(false); }
   };
   useEffect(() => {
     client.get(`/auth/me`).then(r => setUser(r.data)).catch(() => setUser(false)).finally(() => setAuthChecking(false));
@@ -889,6 +934,51 @@ function App() {
               {adminStats.users.never_logged_in > 0 && (
                 <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>{adminStats.users.never_logged_in} user{adminStats.users.never_logged_in === 1 ? "" : "s"} signed up before login tracking started and haven't logged in since - not counted as active until their next login.</p>
               )}
+
+              <div style={{ borderTop: "1px solid var(--line)", marginTop: 22, paddingTop: 18 }}>
+                <p className="eyebrow">LANDING PAGE</p>
+                <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>Stat flashcards</h3>
+                <p className="readonly-hint" style={{ marginBottom: 14 }}>Shown to logged-out visitors on the homepage. Update these as new IRDAI figures come out - no code changes or redeploy needed.</p>
+                {!landingStatsEdit ? (
+                  <p className="readonly-hint">Loading…</p>
+                ) : (
+                  <>
+                    {landingStatsEdit.map((s, i) => (
+                      <div key={i} className="row-2" style={{ marginBottom: 10 }} data-testid={`landing-stat-edit-${i}`}>
+                        <label style={{ fontSize: 11 }}>Value
+                          <input
+                            value={s.value} placeholder="e.g. 11%"
+                            onChange={(e) => setLandingStatsEdit((prev) => prev.map((p, pi) => pi === i ? { ...p, value: e.target.value } : p))}
+                            data-testid={`landing-stat-value-${i}`}
+                          />
+                        </label>
+                        <label style={{ fontSize: 11 }}>Description
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <input
+                              value={s.label} placeholder="What this number means"
+                              onChange={(e) => setLandingStatsEdit((prev) => prev.map((p, pi) => pi === i ? { ...p, label: e.target.value } : p))}
+                              data-testid={`landing-stat-label-${i}`}
+                            />
+                            {landingStatsEdit.length > 1 && (
+                              <button type="button" className="icon-button" aria-label="Remove stat" onClick={() => setLandingStatsEdit((prev) => prev.filter((_, pi) => pi !== i))} data-testid={`remove-landing-stat-${i}`}><Trash2 size={14} /></button>
+                            )}
+                          </div>
+                        </label>
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                      {landingStatsEdit.length < 8 && (
+                        <button type="button" className="text-button" style={{ margin: 0 }} onClick={() => setLandingStatsEdit((prev) => [...prev, { value: "", label: "" }])} data-testid="add-landing-stat-button">
+                          <Plus size={13} /> Add stat
+                        </button>
+                      )}
+                      <button type="button" className="primary-button" style={{ marginLeft: "auto" }} disabled={savingLandingStats} onClick={saveLandingStats} data-testid="save-landing-stats-button">
+                        {savingLandingStats ? "Saving…" : "Save changes"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </>
           )}
         </div>

@@ -1230,6 +1230,47 @@ async def search(q: str, user: dict = Depends(current_user)):
     return {"policies": policies, "claims": claims, "documents": documents}
 
 
+class LandingStat(BaseModel):
+    value: str = Field(min_length=1, max_length=20)
+    label: str = Field(min_length=1, max_length=200)
+
+
+class LandingStatsUpdate(BaseModel):
+    stats: list[LandingStat] = Field(min_length=1, max_length=8)
+
+
+# Shown if nothing has been configured yet (e.g. a fresh deployment before an
+# admin has set anything) - the same figures the landing page shipped with,
+# researched from IRDAI's own FY24 Annual Report and industry claim-rejection
+# analyses. An admin can update these anytime via PUT /admin/landing-stats
+# without needing a new code deploy - source data changes yearly, code shouldn't
+# need to.
+DEFAULT_LANDING_STATS = [
+    {"value": "11%", "label": "of health insurance claims were disallowed by insurers in FY24, per IRDAI's own Annual Report."},
+    {"value": "32%", "label": "of reimbursement rejections trace back to incomplete or illegible discharge summaries - a paperwork problem, not a medical one."},
+    {"value": "\u20b926,000cr", "label": "in health claims were held back by insurers that year alone, industry-wide."},
+    {"value": "3.7%", "label": "is India's insurance penetration rate - most households are underinsured for what a real hospitalization costs."},
+]
+
+
+@api_router.get("/public/landing-stats")
+async def get_landing_stats():
+    """No auth required - this backs the marketing landing page, which by
+    definition is shown to people who aren't logged in yet."""
+    doc = await db.site_content.find_one({"key": "landing_stats"}, {"_id": 0})
+    return {"stats": doc["stats"] if doc else DEFAULT_LANDING_STATS}
+
+
+@api_router.put("/admin/landing-stats")
+async def update_landing_stats(input: LandingStatsUpdate, user: dict = Depends(current_user)):
+    if not is_platform_admin(user):
+        raise HTTPException(status_code=403, detail="Not authorized to edit landing page content")
+    stats = [s.model_dump() for s in input.stats]
+    await db.site_content.update_one({"key": "landing_stats"}, {"$set": {"stats": stats}}, upsert=True)
+    await audit(user, "landing_stats_updated", f"Updated landing page stats ({len(stats)} entries)")
+    return {"stats": stats}
+
+
 @api_router.get("/admin/stats")
 async def admin_stats(user: dict = Depends(current_user)):
     if not is_platform_admin(user):
