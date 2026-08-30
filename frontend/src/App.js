@@ -273,7 +273,7 @@ function Avatar({ user, size = "small" }) {
   return <span className={cls} data-testid="account-avatar-initials">{initials(user?.name)}</span>;
 }
 
-function AccountMenu({ user, onManageAccess, onSignOut, onSupport }) {
+function AccountMenu({ user, onManageAccess, onSignOut, onSupport, onOpenAdminStats }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -302,6 +302,9 @@ function AccountMenu({ user, onManageAccess, onSignOut, onSupport }) {
           <div className="account-menu-list">
             {user.role === "owner" && (
               <button role="menuitem" onClick={() => { setOpen(false); onManageAccess(); }} data-testid="account-menu-manage-access"><Settings size={15} /><span>Manage members</span></button>
+            )}
+            {user.is_platform_admin && (
+              <button role="menuitem" onClick={() => { setOpen(false); onOpenAdminStats(); }} data-testid="account-menu-admin-stats"><LayoutDashboard size={15} /><span>Admin stats</span></button>
             )}
             <button role="menuitem" onClick={() => { setOpen(false); onSupport(); }} data-testid="account-menu-support"><LifeBuoy size={15} /><span>Support centre</span></button>
             <button role="menuitem" className="danger" onClick={() => { setOpen(false); onSignOut(); }} data-testid="account-menu-signout"><LogOut size={15} /><span>Sign out</span></button>
@@ -416,6 +419,17 @@ function App() {
     if (item.target_type === "claim" && item.target_id) openClaim(item.target_id);
     else if (item.target_type === "policy") navigate("policies");
   };
+
+  const [adminStats, setAdminStats] = useState(null);
+  const [adminStatsOpen, setAdminStatsOpen] = useState(false);
+  const openAdminStats = async () => {
+    setAdminStatsOpen(true);
+    setAdminStats(null);
+    try {
+      const res = await client.get("/admin/stats");
+      setAdminStats(res.data);
+    } catch (err) { notify(apiError(err), true); setAdminStatsOpen(false); }
+  };
   useEffect(() => {
     client.get(`/auth/me`).then(r => setUser(r.data)).catch(() => setUser(false)).finally(() => setAuthChecking(false));
   }, []);
@@ -518,7 +532,7 @@ function App() {
             )}
           </div>
 
-          <AccountMenu user={user} onManageAccess={openMembers} onSignOut={signOut} onSupport={() => notify("Support centre is ready for your questions")} />
+          <AccountMenu user={user} onManageAccess={openMembers} onSignOut={signOut} onSupport={() => notify("Support centre is ready for your questions")} onOpenAdminStats={openAdminStats} />
         </div>
       </header>
       <div className="content-wrap">
@@ -676,6 +690,37 @@ function App() {
       </div>
     )}
     {openClaimId && <ClaimDetail claimId={openClaimId} canEdit={canEdit} onClose={() => window.history.back()} onChange={refreshDashboard} notify={notify} />}
+
+    {adminStatsOpen && (
+      <div className="modal-backdrop" data-testid="admin-stats-modal">
+        <div className="modal">
+          <button className="close-button" aria-label="Close" data-testid="close-admin-stats-button" onClick={() => setAdminStatsOpen(false)}><X size={18} /></button>
+          <p className="eyebrow">ADMIN · PLATFORM-WIDE</p>
+          <h2>Usage stats</h2>
+          {!adminStats ? (
+            <p className="readonly-hint">Loading…</p>
+          ) : (
+            <>
+              <p className="readonly-hint" style={{ marginBottom: 18 }}>Across every household on Coversfolio, not just yours. As of {new Date(adminStats.generated_at).toLocaleString("en-IN")}.</p>
+              <div className="card-grid" style={{ marginBottom: 6 }}>
+                <article className="entry" data-testid="admin-stat-households"><strong style={{ fontSize: 12 }}>Households</strong><p style={{ fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>{adminStats.households.total}</p></article>
+                <article className="entry" data-testid="admin-stat-users"><strong style={{ fontSize: 12 }}>Total users</strong><p style={{ fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>{adminStats.users.total}</p></article>
+                <article className="entry" data-testid="admin-stat-active-7d"><strong style={{ fontSize: 12 }}>Active (7 days)</strong><p style={{ fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>{adminStats.users.active_last_7_days}</p></article>
+                <article className="entry" data-testid="admin-stat-active-30d"><strong style={{ fontSize: 12 }}>Active (30 days)</strong><p style={{ fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>{adminStats.users.active_last_30_days}</p></article>
+                <article className="entry" data-testid="admin-stat-signups-7d"><strong style={{ fontSize: 12 }}>New signups (7 days)</strong><p style={{ fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>{adminStats.users.signups_last_7_days}</p></article>
+                <article className="entry" data-testid="admin-stat-signups-30d"><strong style={{ fontSize: 12 }}>New signups (30 days)</strong><p style={{ fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>{adminStats.users.signups_last_30_days}</p></article>
+                <article className="entry" data-testid="admin-stat-policies"><strong style={{ fontSize: 12 }}>Policies tracked</strong><p style={{ fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>{adminStats.policies.total}</p></article>
+                <article className="entry" data-testid="admin-stat-claims"><strong style={{ fontSize: 12 }}>Claims total</strong><p style={{ fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>{adminStats.claims.total}<small style={{ display: "block", fontSize: 10, fontWeight: 500, color: "var(--muted)" }}>{adminStats.claims.in_progress} in progress</small></p></article>
+                <article className="entry" data-testid="admin-stat-documents"><strong style={{ fontSize: 12 }}>Documents stored</strong><p style={{ fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>{adminStats.documents.total}</p></article>
+              </div>
+              {adminStats.users.never_logged_in > 0 && (
+                <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>{adminStats.users.never_logged_in} user{adminStats.users.never_logged_in === 1 ? "" : "s"} signed up before login tracking started and haven't logged in since - not counted as active until their next login.</p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    )}
   </div>;
 }
 export default App;

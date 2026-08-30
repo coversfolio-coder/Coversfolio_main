@@ -77,6 +77,18 @@ SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "").strip() or SMTP_USER
 EMAIL_ENABLED = bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD and FROM_EMAIL)
+
+# Platform-level admin access (site-wide usage stats) is separate from any
+# household's owner/member/agent roles - those are scoped to one household's
+# data, but "how many people use Coversfolio" spans every household. Rather
+# than adding an is_admin flag to the user model (one more thing to keep
+# secure and audit), access is controlled by an env var the site operator sets
+# directly in the deployment - the same pattern already used for SMTP/Gemini config.
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+
+def is_platform_admin(user: dict) -> bool:
+    return user.get("email", "").lower() in ADMIN_EMAILS
 # The link a password-reset email points back to. Falls back to the first
 # configured CORS origin (already the frontend's real domain in production)
 # so this doesn't need to be set separately in the common case.
@@ -874,7 +886,7 @@ def create_token(user_id: str, email: str, token_type: str, duration: timedelta)
 
 
 def public_user(user: dict) -> dict:
-    return {"id": user["id"], "email": user["email"], "name": user["name"], "household_id": user["household_id"], "role": user["role"], "picture": user.get("picture"), "auth_provider": user.get("auth_provider", "email")}
+    return {"id": user["id"], "email": user["email"], "name": user["name"], "household_id": user["household_id"], "role": user["role"], "picture": user.get("picture"), "auth_provider": user.get("auth_provider", "email"), "is_platform_admin": is_platform_admin(user)}
 
 
 async def current_user(request: Request) -> dict:
@@ -902,6 +914,13 @@ def set_session(response: Response, user: dict):
     secure = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
     response.set_cookie("access_token", access, httponly=True, secure=secure, samesite="lax", max_age=900, path="/")
     response.set_cookie("refresh_token", refresh, httponly=True, secure=secure, samesite="lax", max_age=604800, path="/")
+
+
+async def record_login(user: dict):
+    """Stamps when this person last actually signed in - separate from
+    created_at (when the account was made), so 'active users' can mean people
+    who actually come back, not just everyone who ever registered."""
+    await db.users.update_one({"id": user["id"]}, {"$set": {"last_login": datetime.now(timezone.utc).isoformat()}})
 
 
 def set_access_cookie_only(response: Response, user: dict):
@@ -1005,6 +1024,7 @@ async def register(input: AuthInput, request: Request, response: Response):
     await db.users.insert_one(user)
     await db.households.insert_one({"id": household_id, "name": f"{input.name}'s household", "city": "India", "members": 1, "owner_id": user["id"]})
     set_session(response, user)
+    await record_login(user)
     return public_user(user)
 
 
@@ -1033,6 +1053,7 @@ async def login(input: AuthInput, request: Request, response: Response):
         raise HTTPException(status_code=401, detail="Email or password is incorrect")
     await db.login_attempts.delete_one({"identifier": identifier})
     set_session(response, user)
+    await record_login(user)
     return public_user(user)
 
 
@@ -1145,6 +1166,7 @@ async def google_sign_in(input: GoogleSignIn, response: Response):
         user.update(updates)
 
     set_session(response, user)
+    await record_login(user)
     return public_user(user)
 
 
@@ -1198,6 +1220,45 @@ async def search(q: str, user: dict = Depends(current_user)):
         {"_id": 0, "id": 1, "filename": 1, "category": 1},
     ).to_list(8)
     return {"policies": policies, "claims": claims, "documents": documents}
+
+
+@api_router.get("/admin/stats")
+async def admin_stats(user: dict = Depends(current_user)):
+    if not is_platform_admin(user):
+        raise HTTPException(status_code=403, detail="Not authorized to view platform stats")
+
+    now = datetime.now(timezone.utc)
+    since_7d = (now - timedelta(days=7)).isoformat()
+    since_30d = (now - timedelta(days=30)).isoformat()
+
+    total_households = await db.households.count_documents({})
+    total_users = await db.users.count_documents({})
+    signups_7d = await db.users.count_documents({"created_at": {"$gte": since_7d}})
+    signups_30d = await db.users.count_documents({"created_at": {"$gte": since_30d}})
+    active_7d = await db.users.count_documents({"last_login": {"$gte": since_7d}})
+    active_30d = await db.users.count_documents({"last_login": {"$gte": since_30d}})
+    never_logged_in = await db.users.count_documents({"last_login": {"$exists": False}})
+
+    total_policies = await db.policies.count_documents({})
+    total_claims = await db.claims.count_documents({})
+    claims_in_progress = await db.claims.count_documents({"status": {"$in": ["in_progress", "reopened", "appealed"]}})
+    total_documents = await db.documents.count_documents({})
+
+    return {
+        "generated_at": now.isoformat(),
+        "households": {"total": total_households},
+        "users": {
+            "total": total_users,
+            "signups_last_7_days": signups_7d,
+            "signups_last_30_days": signups_30d,
+            "active_last_7_days": active_7d,
+            "active_last_30_days": active_30d,
+            "never_logged_in": never_logged_in,
+        },
+        "policies": {"total": total_policies},
+        "claims": {"total": total_claims, "in_progress": claims_in_progress},
+        "documents": {"total": total_documents},
+    }
 
 
 @api_router.get("/dashboard")
@@ -1393,6 +1454,7 @@ async def accept_invite(input: InviteAccept, response: Response):
     await db.households.update_one({"id": invite["household_id"]}, {"$inc": {"members": 1}})
     await audit(user, "invite_accepted", f"Joined household as {invite['role']}", invite["email"])
     set_session(response, user)
+    await record_login(user)
     return public_user(user)
 
 
