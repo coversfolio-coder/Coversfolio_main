@@ -94,7 +94,7 @@ export default function EvidencePage({ canEdit, notify }) {
     return amounts.length > 0 ? Math.max(...amounts) : null;
   };
 
-  const useAmountAsValue = async (itemId, amount) => {
+  const applyAmountAsValue = async (itemId, amount) => {
     try {
       await client.put(`/evidence/${itemId}`, { value: amount });
       notify(`Value updated to ₹${amount.toLocaleString("en-IN")}`);
@@ -164,7 +164,7 @@ export default function EvidencePage({ canEdit, notify }) {
                               </strong>
                               <div style={{ display: "flex", gap: 10 }}>
                                 {canEdit && detectedAmount && (
-                                  <button className="text-button" style={{ padding: 0 }} data-testid={`use-amount-${doc.id}`} onClick={() => useAmountAsValue(item.id, detectedAmount)}>
+                                  <button className="text-button" style={{ padding: 0 }} data-testid={`use-amount-${doc.id}`} onClick={() => applyAmountAsValue(item.id, detectedAmount)}>
                                     Use ₹{detectedAmount.toLocaleString("en-IN")} as value
                                   </button>
                                 )}
