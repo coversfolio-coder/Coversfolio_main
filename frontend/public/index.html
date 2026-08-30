@@ -37,13 +37,53 @@
         work correctly both with client-side routing and a non-root public URL.
         Learn how to configure a non-root public URL by running `npm run build`.
         -->
-        <title>Coversfolio | Claim &amp; Coverage Companion</title>
+        <title>Coversfolio | A calmer way through a claim</title>
         <script>window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);</script>
         <script src="https://accounts.google.com/gsi/client" async defer></script>
     </head>
     <body>
         <noscript>You need to enable JavaScript to run this app.</noscript>
-        <div id="root"></div>
+        <div id="root">
+          <main style="max-width:760px;margin:60px auto;padding:0 24px;font-family:Arial,Helvetica,sans-serif;color:#12141C;line-height:1.6">
+            <h1 style="font-size:32px;margin-bottom:12px">Your claim shouldn't get rejected over a missing form.</h1>
+            <p style="font-size:16px;color:#5B6172">
+              Coversfolio helps Indian households organize insurance policies and compile exactly what their insurer
+              needs to process a claim - so paperwork isn't what costs a family the payout they're owed.
+            </p>
+            <h2 style="font-size:20px;margin-top:32px">What Coversfolio does</h2>
+            <ul style="color:#5B6172">
+              <li><strong>One place for every policy</strong> - sum insured, renewal dates, and who's covered, tracked automatically.</li>
+              <li><strong>Plain-language policy analysis</strong> - waiting periods, exclusions, and coverage explained, not buried in fine print.</li>
+              <li><strong>A claim compiler</strong> - bills sorted automatically, a field-by-field cheat sheet matching the insurer's own form, and the right document checklist for Cashless or Reimbursement claims.</li>
+              <li><strong>Know your rights</strong> - the IRDAI-mandated timelines your insurer must follow, cited from the actual regulations.</li>
+            </ul>
+            <h2 style="font-size:20px;margin-top:32px">Frequently asked questions</h2>
+            <h3 style="font-size:16px;margin-bottom:4px">Is Coversfolio free to use?</h3>
+            <p style="color:#5B6172">Yes. Tracking policies, storing documents, and compiling your claim checklist and cheat sheet are free.</p>
+            <h3 style="font-size:16px;margin-bottom:4px">Does Coversfolio sell insurance?</h3>
+            <p style="color:#5B6172">No. Coversfolio doesn't sell policies, act as a broker or agent, or get paid by any insurer - it organizes what you already have.</p>
+            <h3 style="font-size:16px;margin-bottom:4px">Does Coversfolio file the claim for me?</h3>
+            <p style="color:#5B6172">No - it compiles your documents and prepares a reference for the insurer's own form; you or your hospital's TPA desk still submit the actual claim.</p>
+          </main>
+        </div>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Organization",
+          "name": "Coversfolio",
+          "url": "https://coversfolio.com/",
+          "logo": "https://coversfolio.com/brand-icon.png",
+          "description": "Coversfolio helps Indian households organize insurance policies and compile exactly what's needed to file a health insurance claim."
+        }
+        </script>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "WebSite",
+          "name": "Coversfolio",
+          "url": "https://coversfolio.com/"
+        }
+        </script>
         <!--
       This HTML file is a template.
       If you open it directly in the browser, you will see an empty page.
