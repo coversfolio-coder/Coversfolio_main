@@ -74,6 +74,10 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
       setPacket(packetRes.data);
       const formRes = await client.get(`/claims/${claimId}/claim-form`);
       setClaimForm(formRes.data);
+      // A previous upload's analysis is saved server-side - show it right
+      // away rather than requiring the person to re-upload the same form
+      // just to see what they already found out last time.
+      if (formRes.data.claim_form_analysis) setClaimFormUploadResult(formRes.data.claim_form_analysis);
       // Default to the most useful tab for this claim type - only on first
       // load, so switching tabs manually afterward (e.g. after saving hospitalization
       // details triggers a refresh) doesn't keep yanking the person back.
@@ -81,7 +85,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
     } catch (err) { notify(apiError(err), true); onClose(); }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { setActiveSheetSection(null); load(); }, [claimId]);
+  useEffect(() => { setActiveSheetSection(null); setClaimFormUploadResult(null); load(); }, [claimId]);
 
   const refresh = async () => { await load(); onChange && onChange(); };
 
@@ -590,7 +594,6 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                       </div>
                     );
                   })()}
-                  )}
 
                   <div className="cf-card" data-testid="claim-form-upload-card">
                     <div className="cf-card-head">

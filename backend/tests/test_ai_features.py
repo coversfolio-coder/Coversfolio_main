@@ -9,18 +9,18 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from conftest import make_policy, make_claim
 
 
-def test_extract_ai_returns_501_when_unconfigured(registered_user):
+def test_extract_ai_returns_501_when_unconfigured(registered_user, monkeypatch):
     client, _ = registered_user
     import server as srv
-    srv.GEMINI_API_KEY = ""
+    monkeypatch.setattr(srv, "GEMINI_API_KEY", "")
     resp = client.post("/api/policies/extract-ai", files={"file": ("p.pdf", b"%PDF-1.4 x", "application/pdf")})
     assert resp.status_code == 501
 
 
-def test_extract_ai_rejects_non_pdf(registered_user):
+def test_extract_ai_rejects_non_pdf(registered_user, monkeypatch):
     client, _ = registered_user
     import server as srv
-    srv.GEMINI_API_KEY = "fake-key"
+    monkeypatch.setattr(srv, "GEMINI_API_KEY", "fake-key")
     resp = client.post("/api/policies/extract-ai", files={"file": ("p.docx", b"x", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
     assert resp.status_code == 415
 
@@ -123,11 +123,11 @@ def test_restoration_benefit_relevant_only_when_exhausted(registered_user):
     assert resp.json()["benefits"]["restoration_benefit"]["relevant_now"] is True
 
 
-def test_gemini_transient_error_retries_then_recovers(registered_user):
+def test_gemini_transient_error_retries_then_recovers(registered_user, monkeypatch):
     client, _ = registered_user
     import server as srv
     from google.genai import errors as genai_errors
-    srv.GEMINI_API_KEY = "fake-key"
+    monkeypatch.setattr(srv, "GEMINI_API_KEY", "fake-key")
     srv.time.sleep = lambda s: None
 
     fake_analysis = srv.PolicyAIAnalysis(insurer_name="Star Health", summary="ok")
@@ -152,11 +152,11 @@ def test_gemini_transient_error_retries_then_recovers(registered_user):
         assert call_count["n"] == 2
 
 
-def test_gemini_quota_error_does_not_retry(registered_user):
+def test_gemini_quota_error_does_not_retry(registered_user, monkeypatch):
     client, _ = registered_user
     import server as srv
     from google.genai import errors as genai_errors
-    srv.GEMINI_API_KEY = "fake-key"
+    monkeypatch.setattr(srv, "GEMINI_API_KEY", "fake-key")
 
     call_count = {"n": 0}
 

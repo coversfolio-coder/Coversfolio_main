@@ -30,6 +30,14 @@ export default function EvidencePage({ canEdit, notify }) {
         if (doc.linked_evidence_id) (byItem[doc.linked_evidence_id] = byItem[doc.linked_evidence_id] || []).push(doc);
       }
       setDocuments(byItem);
+      // A receipt may already have been OCR'd in a previous session - that's
+      // saved server-side, so show it immediately instead of making the
+      // person click "Extract text" again just to see what's already known.
+      const preloaded = {};
+      r.data.documents.forEach((doc) => {
+        if (doc.extracted_text) preloaded[doc.id] = { text: doc.extracted_text, method: doc.extracted_text_method };
+      });
+      if (Object.keys(preloaded).length > 0) setOcrResults((prev) => ({ ...preloaded, ...prev }));
     }).catch(() => setDocuments({}));
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps

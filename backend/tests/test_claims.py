@@ -97,3 +97,58 @@ def test_agent_cannot_create_claim(registered_user):
     agent_client.post("/api/household/invites/accept", json={"token": invite["invite_token"], "name": "Agent", "password": "SecurePass123!"})
     resp = agent_client.post("/api/claims", json={"title": "Test claim", "claim_type": "Cashless"})
     assert resp.status_code == 403
+
+
+def test_claim_form_pdf_download_works(registered_user):
+    """Regression test: an earlier edit accidentally deleted the 'def
+    render_claim_form_pdf' line while adding an unrelated endpoint nearby,
+    leaving its body as unreachable dead code and making the function
+    undefined. No test caught this until it was reported live - this and the
+    persistence test below exist specifically so that class of mistake fails
+    the test suite instead of shipping silently again."""
+    client, _ = registered_user
+    policy = make_policy(client)
+    claim = make_claim(client, claim_type="Reimbursement", policy_id=policy["id"])
+    r = client.get(f"/api/claims/{claim['id']}/claim-form-pdf")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/pdf"
+    assert len(r.content) > 500
+
+
+def test_claim_form_analysis_persists_and_reloads(registered_user):
+    """The uploaded claim form's OCR/AI match result must survive a reload,
+    not just live in frontend state for the current session - and a fresh
+    upload should replace it, the same way a new document replaces an old one."""
+    import io
+    from PIL import Image, ImageDraw
+
+    client, _ = registered_user
+    policy = make_policy(client, policy_number="PER-999")
+    claim = make_claim(client, claim_type="Reimbursement", policy_id=policy["id"])
+
+    img = Image.new("RGB", (300, 100), color="white")
+    ImageDraw.Draw(img).text((10, 10), "Policy No: ____", fill="black")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+
+    r = client.post(f"/api/claims/{claim['id']}/analyze-claim-form", files={"file": ("form.png", buf.getvalue(), "image/png")})
+    assert r.status_code == 200, r.text
+    assert r.json()["mode"] == "ocr_only"  # no GEMINI_API_KEY in the test environment
+
+    # Confirm the follow-up GET (simulating "closed the app and came back")
+    # actually surfaces the saved analysis, not just the one-time POST response.
+    r = client.get(f"/api/claims/{claim['id']}/claim-form")
+    assert r.status_code == 200
+    saved = r.json().get("claim_form_analysis")
+    assert saved is not None
+    assert saved["filename"] == "form.png"
+
+    # A fresh upload should replace it outright, not merge or duplicate.
+    buf2 = io.BytesIO()
+    img2 = Image.new("RGB", (300, 100), color="white")
+    ImageDraw.Draw(img2).text((10, 10), "Name of Insured: ____", fill="black")
+    img2.save(buf2, format="PNG")
+    r = client.post(f"/api/claims/{claim['id']}/analyze-claim-form", files={"file": ("form-v2.png", buf2.getvalue(), "image/png")})
+    assert r.status_code == 200, r.text
+    r = client.get(f"/api/claims/{claim['id']}/claim-form")
+    assert r.json()["claim_form_analysis"]["filename"] == "form-v2.png"

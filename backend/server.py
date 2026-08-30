@@ -2687,6 +2687,10 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
             {"label": v["label"], "timeframe": f"{v['hours']} hour{'s' if v['hours'] != 1 else ''}" if v["hours"] < 24 else f"{v['hours'] // 24} days", "citation": v["citation"]}
             for v in SLA_DEFINITIONS.values() if claim["type"] in v["applicable_to"]
         ] + ([{"label": "Document requests must come all at once", "timeframe": "within 15 days", "citation": REIMBURSEMENT_QUERY_RULE}] if claim["type"] == "Reimbursement" else []),
+        # Whatever the last uploaded claim form was matched against, saved so
+        # it's still here on reload - a fresh upload replaces this outright,
+        # the same way a new document upload replaces an old one.
+        "claim_form_analysis": claim.get("claim_form_analysis"),
     }
 
 
@@ -2723,8 +2727,10 @@ async def analyze_claim_form(claim_id: str, file: UploadFile = File(...), user: 
             )
         except ocr_module.OCRError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        result = {"mode": "ocr_only", "extracted_text": ocr_result["text"], "fields": [], "filename": file.filename, "analyzed_at": datetime.now(timezone.utc).isoformat()}
+        await db.claims.update_one({"id": claim_id, "household_id": user["household_id"]}, {"$set": {"claim_form_analysis": result}})
         await audit(user, "claim_form_ocr_only", f"OCR'd uploaded claim form '{file.filename}' (AI matching unavailable)")
-        return {"mode": "ocr_only", "extracted_text": ocr_result["text"], "fields": [], "known_data": known_data}
+        return {**result, "known_data": known_data}
 
     mime_type = "application/pdf" if file.content_type == "application/pdf" else file.content_type
     try:
@@ -2738,7 +2744,12 @@ async def analyze_claim_form(claim_id: str, file: UploadFile = File(...), user: 
         raise HTTPException(status_code=502, detail="Couldn't analyze this form - try again, or check it's a clear, readable photo or scan") from exc
 
     await audit(user, "claim_form_analyzed", f"Analyzed uploaded claim form '{file.filename}' against known claim data")
-    return {"mode": "matched", "fields": analysis["fields"], "known_data": known_data}
+    result = {"mode": "matched", "fields": analysis["fields"], "filename": file.filename, "analyzed_at": datetime.now(timezone.utc).isoformat()}
+    await db.claims.update_one({"id": claim_id, "household_id": user["household_id"]}, {"$set": {"claim_form_analysis": result}})
+    return {**result, "known_data": known_data}
+
+
+def render_claim_form_pdf(data: dict) -> io.BytesIO:
     """Turns the computed claim-form data into an actual downloadable document -
     not a replacement for the insurer's own Part A/Part B forms (those need real
     signatures), but a ready reference that has every figure and document status

@@ -54,7 +54,17 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
   };
 
   const load = () => {
-    client.get("/documents").then((r) => setDocuments(r.data.documents)).catch((err) => notify(apiError(err), true));
+    client.get("/documents").then((r) => {
+      setDocuments(r.data.documents);
+      // Some documents may already have been OCR'd in a previous session -
+      // that's saved server-side, so show it immediately instead of making
+      // the person click "Extract text" again just to see what's already known.
+      const preloaded = {};
+      r.data.documents.forEach((doc) => {
+        if (doc.extracted_text) preloaded[doc.id] = { text: doc.extracted_text, method: doc.extracted_text_method };
+      });
+      if (Object.keys(preloaded).length > 0) setOcrResults((prev) => ({ ...preloaded, ...prev }));
+    }).catch((err) => notify(apiError(err), true));
     client.get("/policies").then((r) => setPolicies(r.data.policies)).catch(() => setPolicies([]));
     client.get("/dashboard").then((r) => setClaims(r.data.claims || [])).catch(() => setClaims([]));
   };
