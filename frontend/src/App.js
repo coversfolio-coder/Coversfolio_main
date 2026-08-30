@@ -323,10 +323,16 @@ function AuthScreen({ onAuthenticated, initialMode = "login", onBack }) {
 
         {(mode === "login" || mode === "register") && (
           <>
+            {mode === "register" && (
+              <label className="auth-consent-inline" data-testid="consent-field">
+                <input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} data-testid="consent-checkbox" />
+                I agree to the Privacy Policy and Terms of Service
+              </label>
+            )}
             {mode === "login" || consent ? (
               <GoogleSignInButton onAuthenticated={onAuthenticated} onError={setError} consentGiven={mode === "login" || consent} />
             ) : (
-              <p className="empty-hint" data-testid="google-consent-gate" style={{ marginBottom: 8 }}>Check the box below to continue with Google.</p>
+              <p className="empty-hint" data-testid="google-consent-gate" style={{ marginBottom: 8 }}>Check the box above to continue with Google.</p>
             )}
             {GOOGLE_CLIENT_ID && <div className="auth-divider" data-testid="auth-divider"><span>or with your email</span></div>}
             <form onSubmit={submit} data-testid="auth-form">
@@ -343,12 +349,6 @@ function AuthScreen({ onAuthenticated, initialMode = "login", onBack }) {
                 >
                   Forgot password?
                 </button>
-              )}
-              {mode === "register" && (
-                <label style={{ display: "flex", alignItems: "flex-start", gap: 8, flexDirection: "row", fontSize: 11 }} data-testid="consent-field">
-                  <input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} style={{ width: "auto", marginTop: 2 }} data-testid="consent-checkbox" />
-                  I agree to the Privacy Policy and Terms of Service
-                </label>
               )}
               {error && <div className="auth-error" role="alert" data-testid="auth-error">{error}</div>}
               <button className="primary-button auth-submit" disabled={busy || (mode === "register" && !consent)} data-testid="auth-submit-button">
