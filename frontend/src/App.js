@@ -134,50 +134,6 @@ function StatsCarousel({ stats }) {
   );
 }
 
-function HeroIllustration() {
-  return (
-    <div className="hero-illustration" aria-hidden="true">
-      <svg viewBox="0 0 600 300" className="hero-illustration-svg">
-        {/* Compiled claim folder */}
-        <g className="hero-folder">
-          <rect x="330" y="70" width="60" height="18" rx="5" fill="#22315C" />
-          <rect x="330" y="82" width="200" height="150" rx="14" fill="#22315C" />
-          <rect x="358" y="118" width="144" height="10" rx="5" fill="#4A5C8F" />
-          <rect x="358" y="142" width="144" height="10" rx="5" fill="#4A5C8F" />
-          <rect x="358" y="166" width="96" height="10" rx="5" fill="#4A5C8F" />
-        </g>
-        <g className="hero-badge">
-          <circle cx="500" cy="90" r="26" fill="#1F7A5C" />
-          <path d="M488 90 L497 99 L514 80" stroke="#FFFFFF" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-        </g>
-
-        {/* Floating documents, each with its own animation delay */}
-        <g className="hero-doc hero-doc-1">
-          <rect x="60" y="60" width="92" height="118" rx="10" fill="#FFFFFF" stroke="#DCDFE6" strokeWidth="1.5" />
-          <rect x="76" y="80" width="60" height="9" rx="4" fill="#A9781F" />
-          <rect x="76" y="100" width="60" height="6" rx="3" fill="#DCDFE6" />
-          <rect x="76" y="114" width="60" height="6" rx="3" fill="#DCDFE6" />
-          <rect x="76" y="128" width="40" height="6" rx="3" fill="#DCDFE6" />
-        </g>
-        <g className="hero-doc hero-doc-2">
-          <rect x="120" y="150" width="92" height="118" rx="10" fill="#FFFFFF" stroke="#DCDFE6" strokeWidth="1.5" />
-          <rect x="136" y="170" width="60" height="9" rx="4" fill="#1F7A5C" />
-          <rect x="136" y="190" width="60" height="6" rx="3" fill="#DCDFE6" />
-          <rect x="136" y="204" width="60" height="6" rx="3" fill="#DCDFE6" />
-          <rect x="136" y="218" width="40" height="6" rx="3" fill="#DCDFE6" />
-        </g>
-        <g className="hero-doc hero-doc-3">
-          <rect x="15" y="150" width="92" height="118" rx="10" fill="#FFFFFF" stroke="#DCDFE6" strokeWidth="1.5" />
-          <rect x="31" y="170" width="60" height="9" rx="4" fill="#22315C" />
-          <rect x="31" y="190" width="60" height="6" rx="3" fill="#DCDFE6" />
-          <rect x="31" y="204" width="60" height="6" rx="3" fill="#DCDFE6" />
-          <rect x="31" y="218" width="40" height="6" rx="3" fill="#DCDFE6" />
-        </g>
-      </svg>
-    </div>
-  );
-}
-
 function LandingPage({ onGetStarted, onLogin }) {
   const [stats, setStats] = useState(DEFAULT_LANDING_STATS);
   useEffect(() => {
@@ -204,7 +160,6 @@ function LandingPage({ onGetStarted, onLogin }) {
         <div className="landing-hero-actions">
           <button className="btn primary large" onClick={onGetStarted} data-testid="landing-hero-cta">Get started free</button>
         </div>
-        <HeroIllustration />
       </section>
 
       <StatsCarousel stats={stats} />
