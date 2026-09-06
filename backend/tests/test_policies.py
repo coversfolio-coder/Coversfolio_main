@@ -91,3 +91,56 @@ def test_agent_cannot_create_policy(registered_user):
         "sum_insured": 100000, "start_date": "2025-01-01", "end_date": "2026-01-01",
     })
     assert resp.status_code == 403
+from datetime import datetime, timedelta, timezone
+from conftest import make_policy
+
+def test_waiting_period_survives_renewal(registered_user):
+    """Regression test for a real reported bug: renewing a policy (uploading
+    a new period's document) was resetting waiting-period countdowns to
+    start from the renewal date instead of the original policy's inception -
+    exactly what happened to a real user 4 years into continuous coverage."""
+    client, user = registered_user
+    original_start = "2022-08-15"  # ~4 years before "today" in this test env
+    policy = make_policy(client, start_date=original_start, end_date="2023-08-14")
+    policy_id = policy["id"]
+
+    ai_insights = {
+        "pre_existing_disease_waiting_months": 36,
+        "schema_version": 3,
+    }
+    client.put(f"/api/policies/{policy_id}", json={"ai_insights": ai_insights})
+
+    # Confirm the waiting period is correctly calculated from the ORIGINAL start date
+    r = client.get(f"/api/policies/{policy_id}")
+    ped_status = r.json()["ai_insights"]["pre_existing_disease_waiting_status"]
+    assert ped_status["covered_now"] is True  # 36 months have passed since 2022
+    print("Before renewal - PED waiting status:", ped_status)
+
+    # Simulate a renewal: update start_date/end_date to reflect the new period,
+    # WITHOUT explicitly touching first_covered_date (exactly what a normal
+    # "update after renewal" flow would send).
+    client.put(f"/api/policies/{policy_id}", json={"start_date": "2026-08-15", "end_date": "2027-08-14"})
+
+    r = client.get(f"/api/policies/{policy_id}")
+    policy_after = r.json()
+    assert policy_after["start_date"] == "2026-08-15"  # current period correctly updated
+    assert policy_after["first_covered_date"] == original_start  # but original inception preserved!
+    ped_status_after = policy_after["ai_insights"]["pre_existing_disease_waiting_status"]
+    assert ped_status_after["covered_now"] is True  # still correctly covered, NOT reset to "36 months from renewal"
+    print("After renewal - first_covered_date preserved:", policy_after["first_covered_date"])
+    print("After renewal - PED waiting status still correct:", ped_status_after)
+
+def test_new_policy_defaults_first_covered_date_to_start_date(registered_user):
+    client, user = registered_user
+    policy = make_policy(client, start_date="2026-01-01", end_date="2027-01-01")
+    r = client.get(f"/api/policies/{policy['id']}")
+    assert r.json()["first_covered_date"] == "2026-01-01"
+    print("Brand new policy correctly defaults first_covered_date to start_date")
+
+def test_first_covered_date_can_be_explicitly_edited(registered_user):
+    client, user = registered_user
+    policy = make_policy(client, start_date="2026-01-01", end_date="2027-01-01")
+    client.put(f"/api/policies/{policy['id']}", json={"first_covered_date": "2020-06-01"})
+    r = client.get(f"/api/policies/{policy['id']}")
+    assert r.json()["first_covered_date"] == "2020-06-01"
+    print("first_covered_date can be explicitly corrected by the user")

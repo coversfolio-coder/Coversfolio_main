@@ -431,6 +431,14 @@ class PolicyCreate(BaseModel):
     sum_insured: float = Field(gt=0)
     start_date: str = Field(min_length=4, max_length=20)
     end_date: str = Field(min_length=4, max_length=20)
+    # Distinct from start_date: this is when CONTINUOUS coverage genuinely
+    # began - the original policy's inception, even if it's been renewed many
+    # times since. Waiting periods (pre-existing disease, named conditions)
+    # are calculated from THIS date under IRDAI rules, not from each
+    # renewal's own start_date. Defaults to start_date at creation time (a
+    # brand-new policy's first coverage date is its own start date); a later
+    # renewal should update start_date/end_date without touching this field.
+    first_covered_date: str | None = Field(default=None, min_length=4, max_length=20)
     insured_people: List[InsuredPerson] = Field(default_factory=list)
     # The IRDAI-mandated Unique Identification Number for this specific
     # insurance product - printed on every policy document. Optional since
@@ -453,6 +461,7 @@ class PolicyUpdate(BaseModel):
     uin: str | None = Field(default=None, max_length=40)
     start_date: str | None = Field(default=None, min_length=4, max_length=20)
     end_date: str | None = Field(default=None, min_length=4, max_length=20)
+    first_covered_date: str | None = Field(default=None, min_length=4, max_length=20)
     insured_people: List[InsuredPerson] | None = None
     ai_insights: dict | None = None
     health_checkup_last_used_date: str | None = Field(default=None, min_length=4, max_length=20)
@@ -1841,7 +1850,12 @@ async def _public_policy_enriched(policy: dict, household_id: str) -> dict:
 
     ai_insights = policy.get("ai_insights")
     if ai_insights:
-        start_date = policy.get("start_date")
+        # Waiting periods (pre-existing disease, named conditions) run from
+        # when continuous coverage first began, not from the current period's
+        # start_date - a renewal shouldn't reset a waiting period that's
+        # already been served. Falls back to start_date for policies saved
+        # before this field existed (where the two are the same anyway).
+        start_date = policy.get("first_covered_date") or policy.get("start_date")
         # ai_insights.get("maternity_cover", {}) only falls back to {} when the KEY
         # is missing - but Gemini legitimately returns maternity_cover: null (not a
         # missing key) whenever a policy doesn't mention maternity at all, which is
@@ -2172,6 +2186,10 @@ async def create_policy(input: PolicyCreate, user: dict = Depends(current_user))
         "id": str(uuid.uuid4()), "household_id": user["household_id"], "created_by": user["id"],
         "insurer_name": input.insurer_name, "policy_number": input.policy_number, "policy_type": input.policy_type,
         "sum_insured": input.sum_insured, "start_date": input.start_date, "end_date": input.end_date,
+        "uin": input.uin,
+        # A brand-new policy's first coverage date is its own start date -
+        # only a later renewal creates the distinction that matters.
+        "first_covered_date": input.first_covered_date or input.start_date,
         "insured_people": [p.model_dump() for p in input.insured_people],
         "ai_insights": input.ai_insights,
         "created_at": now, "updated_at": now,
@@ -2290,7 +2308,7 @@ def check_condition_against_policy(policy: dict, condition: str) -> dict:
         }
 
     query = condition.strip().lower()
-    start_date = policy.get("start_date")
+    start_date = policy.get("first_covered_date") or policy.get("start_date")
     candidates = []
 
     maternity = ai_insights.get("maternity_cover")

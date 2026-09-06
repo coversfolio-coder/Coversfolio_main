@@ -4,7 +4,7 @@ import { ArrowUpRight, BookOpen, Check, FileScan, FileText, MapPin, Plus, Shield
 
 const emptyForm = {
   insurer_name: "", policy_number: "", policy_type: "Health",
-  sum_insured: "", start_date: "", end_date: "",
+  sum_insured: "", start_date: "", end_date: "", first_covered_date: "",
   insured_people: [{ name: "", relation: "Self", dob: "" }],
 };
 
@@ -41,6 +41,18 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       notify("Logged - noted today as when you used it");
       load();
     } catch (err) { notify(apiError(err), true); } finally { setLoggingCheckup(false); }
+  };
+  const [editingFirstCovered, setEditingFirstCovered] = useState(false);
+  const [firstCoveredInput, setFirstCoveredInput] = useState("");
+  const saveFirstCoveredDate = async (policyId) => {
+    if (!firstCoveredInput) return;
+    try {
+      const res = await client.put(`/policies/${policyId}`, { first_covered_date: firstCoveredInput });
+      setDetailsPolicy(res.data);
+      notify("Updated - waiting periods will now count from this date");
+      setEditingFirstCovered(false);
+      load();
+    } catch (err) { notify(apiError(err), true); }
   };
   const [conditionQuery, setConditionQuery] = useState("");
   const [conditionResult, setConditionResult] = useState(null);
@@ -360,6 +372,26 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
             <div className="entry" style={{ marginBottom: 12 }} data-testid="policy-basic-details">
               <p><em>Sum insured:</em> ₹{Number(detailsPolicy.sum_insured).toLocaleString("en-IN")}</p>
               <p><em>Valid:</em> {detailsPolicy.start_date} to {detailsPolicy.end_date}</p>
+              <p style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <em>Covered since:</em>
+                {editingFirstCovered ? (
+                  <>
+                    <input type="date" value={firstCoveredInput} onChange={(e) => setFirstCoveredInput(e.target.value)} style={{ width: "auto" }} data-testid="edit-first-covered-date-input" />
+                    <button type="button" className="text-button" style={{ padding: 0 }} onClick={() => saveFirstCoveredDate(detailsPolicy.id)} data-testid="save-first-covered-date-button">Save</button>
+                    <button type="button" className="text-button" style={{ padding: 0 }} onClick={() => setEditingFirstCovered(false)}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    {detailsPolicy.first_covered_date || detailsPolicy.start_date}
+                    {canEdit && (
+                      <button type="button" className="text-button" style={{ padding: 0 }} onClick={() => { setFirstCoveredInput(detailsPolicy.first_covered_date || detailsPolicy.start_date); setEditingFirstCovered(true); }} data-testid="edit-first-covered-date-button">
+                        Fix this
+                      </button>
+                    )}
+                  </>
+                )}
+              </p>
+              <p style={{ fontSize: 10, color: "var(--faint)", margin: "2px 0 0" }}>If this policy has been renewed continuously, this should be your original start date - not the current renewal period. It's what your waiting-period countdowns actually run from.</p>
               {detailsPolicy.insured_people?.length > 0 && (
                 <p>
                   <em><Users size={12} style={{ verticalAlign: -2 }} /> Covered people:</em>{" "}
@@ -791,6 +823,13 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 <label>Start date<input required type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} data-testid="policy-start-date-input" /></label>
                 <label>End date<input required type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} data-testid="policy-end-date-input" /></label>
               </div>
+              <label>
+                First covered since <small style={{ color: "var(--muted)", fontWeight: 400 }}>(optional - only if this policy has been renewed before)</small>
+                <input type="date" value={form.first_covered_date} onChange={(e) => setForm({ ...form, first_covered_date: e.target.value })} data-testid="policy-first-covered-date-input" />
+              </label>
+              <p className="readonly-hint" style={{ margin: "-8px 0 4px" }}>
+                If you've renewed this policy continuously, use the date you <em>first</em> took it - not this year's renewal date. This is what your pre-existing-condition waiting period is actually measured from, and uploading a renewal document shouldn't reset it.
+              </p>
               <div>
                 <label style={{ marginBottom: 8, display: "block" }}>Insured people</label>
                 {form.insured_people.map((p, i) => (
