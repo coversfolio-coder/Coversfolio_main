@@ -152,3 +152,74 @@ def test_claim_form_analysis_persists_and_reloads(registered_user):
     assert r.status_code == 200, r.text
     r = client.get(f"/api/claims/{claim['id']}/claim-form")
     assert r.json()["claim_form_analysis"]["filename"] == "form-v2.png"
+from conftest import make_policy, make_claim
+
+def test_deduction_settlement_with_billed_and_reason(registered_user):
+    client, user = registered_user
+    policy = make_policy(client, insurer_name="Star Health")
+    claim = make_claim(client, claim_type="Reimbursement", policy_id=policy["id"])
+
+    r = client.post(f"/api/claims/{claim['id']}/settlements", json={
+        "amount": 15000, "kind": "deduction", "note": "Operation Theatre charges",
+        "billed_amount": 15000, "insurer_reason": "Not payable under maternity benefit",
+    })
+    assert r.status_code == 200, r.text
+    entry = r.json()
+    assert entry["billed_amount"] == 15000
+    assert entry["insurer_reason"] == "Not payable under maternity benefit"
+    print("Deduction entry with billed_amount/insurer_reason:", entry)
+
+def test_escalation_letter_includes_real_deduction_data(registered_user):
+    client, user = registered_user
+    policy = make_policy(client, insurer_name="Star Health", policy_number="7187112401017592")
+    claim = make_claim(client, claim_type="Reimbursement", policy_id=policy["id"])
+    client.post(f"/api/claims/{claim['id']}/settlements", json={
+        "amount": 15000, "kind": "deduction", "note": "Operation Theatre charges",
+        "billed_amount": 15000, "insurer_reason": "Not payable under maternity benefit",
+    })
+    client.post(f"/api/claims/{claim['id']}/settlements", json={
+        "amount": 8000, "kind": "deduction", "note": "Consultant fees",
+        "billed_amount": 8000, "insurer_reason": None,
+    })
+
+    r = client.get(f"/api/claims/{claim['id']}/escalation-letter", params={"stage": "gro"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["deduction_count"] == 2
+    letter = data["letter"]
+    assert "Star Health" in letter
+    assert "7187112401017592" in letter
+    assert "Operation Theatre charges" in letter
+    assert "Consultant fees" in letter
+    assert "₹15,000.00" in letter
+    assert "Not payable under maternity benefit" in letter
+    assert "No reason provided by insurer" in letter  # the second deduction had no insurer_reason
+    assert "exact clause and page number" in letter
+    assert "30 days" in letter
+    print("GRO letter generated correctly, total dispute amount shown:", "₹23,000.00" in letter)
+
+    r2 = client.get(f"/api/claims/{claim['id']}/escalation-letter", params={"stage": "ombudsman"})
+    assert r2.status_code == 200
+    assert "Insurance Ombudsman" in r2.json()["letter"]
+    print("Ombudsman-stage letter also generated correctly")
+
+def test_escalation_letter_rejects_bad_stage(registered_user):
+    client, user = registered_user
+    policy = make_policy(client)
+    claim = make_claim(client, claim_type="Reimbursement", policy_id=policy["id"])
+    r = client.get(f"/api/claims/{claim['id']}/escalation-letter", params={"stage": "bogus"})
+    assert r.status_code == 400
+
+def test_escalation_path_present_in_claim_form(registered_user):
+    client, user = registered_user
+    policy = make_policy(client)
+    claim = make_claim(client, claim_type="Cashless", policy_id=policy["id"])
+    r = client.get(f"/api/claims/{claim['id']}/claim-form")
+    assert r.status_code == 200
+    path = r.json()["escalation_path"]
+    assert len(path) == 3
+    assert path[0]["label"] == "Insurer's Grievance Redressal Officer (GRO)"
+    assert path[2]["label"] == "Insurance Ombudsman"
+    assert "50 lakh" in path[2]["citation"]
+    assert "1 year" in path[2]["timeframe"]
+    print("Escalation path present for Cashless claim too (not type-restricted):", [p["label"] for p in path])

@@ -24,7 +24,23 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   const [tab, setTab] = useState(null);
   const [note, setNote] = useState("");
   const [query, setQuery] = useState({ question: "", source: "Insurer" });
-  const [settlement, setSettlement] = useState({ amount: "", kind: "partial", note: "" });
+  const [settlement, setSettlement] = useState({ amount: "", kind: "partial", note: "", billed_amount: "", insurer_reason: "" });
+  const [escalationLetter, setEscalationLetter] = useState(null);
+  const [escalationStage, setEscalationStage] = useState("gro");
+  const [generatingLetter, setGeneratingLetter] = useState(false);
+
+  const generateEscalationLetter = async (stage) => {
+    setGeneratingLetter(true);
+    setEscalationStage(stage);
+    try {
+      const res = await client.get(`/claims/${claimId}/escalation-letter`, { params: { stage } });
+      setEscalationLetter(res.data.letter);
+    } catch (err) { notify(apiError(err), true); } finally { setGeneratingLetter(false); }
+  };
+  const copyEscalationLetter = () => {
+    navigator.clipboard.writeText(escalationLetter);
+    notify("Letter copied to clipboard");
+  };
   const [reason, setReason] = useState("");
   const [hospForm, setHospForm] = useState({
     patient_name: "", hospital_name: "", admission_date: "", discharge_date: "", diagnosis: "", is_maternity: false,
@@ -159,7 +175,12 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   const submitSettlement = (e) => {
     e.preventDefault();
     if (!settlement.amount) return;
-    call(async () => { await client.post(`/claims/${claimId}/settlements`, { ...settlement, amount: Number(settlement.amount) }); setSettlement({ amount: "", kind: "partial", note: "" }); }, "Settlement recorded");
+    const payload = {
+      amount: Number(settlement.amount), kind: settlement.kind, note: settlement.note,
+      billed_amount: settlement.billed_amount ? Number(settlement.billed_amount) : null,
+      insurer_reason: settlement.insurer_reason || null,
+    };
+    call(async () => { await client.post(`/claims/${claimId}/settlements`, payload); setSettlement({ amount: "", kind: "partial", note: "", billed_amount: "", insurer_reason: "" }); }, "Settlement recorded");
   };
   const changeStatus = (status) => {
     call(async () => { await client.post(`/claims/${claimId}/status`, { status, reason }); setReason(""); }, `Marked ${status}`);
@@ -655,6 +676,26 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                       </div>
                     </div>
                   )}
+
+                  {claimForm.escalation_path?.length > 0 && (
+                    <div className="cf-card" data-testid="escalation-path">
+                      <div className="cf-card-head">
+                        <h3>If this claim gets disputed</h3>
+                        <p>The real, three-step escalation path in India - each step is free, and you don't need a lawyer for any of them.</p>
+                      </div>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        {claimForm.escalation_path.map((step) => (
+                          <div key={step.step} className="entry" data-testid={`escalation-step-${step.step}`}>
+                            <header style={{ marginBottom: 4 }}>
+                              <div style={{ flex: 1 }}><strong style={{ fontSize: 12 }}>{step.step}. {step.label}</strong></div>
+                              <span className="chip chip-neutral">{step.timeframe}</span>
+                            </header>
+                            <p style={{ fontSize: 10, color: "var(--muted)", margin: 0, lineHeight: 1.5 }}>{step.citation}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </section>
@@ -708,6 +749,8 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                   <article className={`entry settlement-${s.kind}`} key={s.id} data-testid={`settlement-${s.id}`}>
                     <header><strong>{inr(s.amount)}</strong><small>{format(s.at)} · {s.recorded_by}</small><span className={`chip chip-${s.kind === "deduction" ? "red" : s.kind === "final" ? "teal" : "blue"}`}>{s.kind}</span></header>
                     {s.note && <p>{s.note}</p>}
+                    {s.billed_amount && <p style={{ fontSize: 11, color: "var(--muted)", margin: "4px 0 0" }}>Billed: {inr(s.billed_amount)}</p>}
+                    {s.insurer_reason && <p style={{ fontSize: 11, color: "var(--muted)", margin: "2px 0 0", fontStyle: "italic" }}>Insurer said: "{s.insurer_reason}"</p>}
                   </article>
                 ))}
               </div>
@@ -718,9 +761,42 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                     <label>Type<select value={settlement.kind} onChange={e => setSettlement({ ...settlement, kind: e.target.value })} data-testid="settlement-kind-select"><option value="partial">Partial payment</option><option value="deduction">Deduction / disallowed</option><option value="final">Final settlement</option></select></label>
                   </div>
                   <label>Note (optional)<textarea rows="2" value={settlement.note} onChange={e => setSettlement({ ...settlement, note: e.target.value })} placeholder="What was covered or deducted?" data-testid="settlement-note-input" /></label>
+                  {settlement.kind === "deduction" && (
+                    <>
+                      <label>Amount actually billed for this item (₹, optional)<input type="number" min="1" step="1" value={settlement.billed_amount} onChange={e => setSettlement({ ...settlement, billed_amount: e.target.value })} placeholder="e.g. 15000" data-testid="settlement-billed-amount-input" /></label>
+                      <label>Insurer's stated reason (optional)<textarea rows="2" value={settlement.insurer_reason} onChange={e => setSettlement({ ...settlement, insurer_reason: e.target.value })} placeholder="What did the insurer say, if anything?" data-testid="settlement-insurer-reason-input" /></label>
+                    </>
+                  )}
                   <button className="primary-button" data-testid="add-settlement-submit"><Plus size={14} /> Record entry</button>
                 </form>
               )}
+
+              <div style={{ borderTop: "1px solid var(--line)", marginTop: 24, paddingTop: 20 }}>
+                <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>Dispute a deduction?</h3>
+                <p className="readonly-hint" style={{ marginBottom: 14 }}>
+                  Generates a structured letter from your recorded deductions, demanding the exact policy clause behind each one - the same kind of specific, itemized request that actually gets insurers to respond.
+                </p>
+                <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+                  <button type="button" className={escalationStage === "gro" ? "primary-button" : "outline-button"} disabled={generatingLetter} onClick={() => generateEscalationLetter("gro")} data-testid="generate-gro-letter-button">
+                    {generatingLetter && escalationStage === "gro" ? "Generating…" : "Letter to Insurer (GRO)"}
+                  </button>
+                  <button type="button" className={escalationStage === "ombudsman" ? "primary-button" : "outline-button"} disabled={generatingLetter} onClick={() => generateEscalationLetter("ombudsman")} data-testid="generate-ombudsman-letter-button">
+                    {generatingLetter && escalationStage === "ombudsman" ? "Generating…" : "Escalate to Ombudsman"}
+                  </button>
+                </div>
+                {escalationLetter && (
+                  <div data-testid="escalation-letter-result">
+                    <textarea
+                      readOnly value={escalationLetter} rows={16}
+                      style={{ width: "100%", fontFamily: "inherit", fontSize: 12, padding: 12, borderRadius: 8, border: "1px solid var(--line)", boxSizing: "border-box" }}
+                      data-testid="escalation-letter-text"
+                    />
+                    <button type="button" className="text-button" style={{ marginTop: 8 }} onClick={copyEscalationLetter} data-testid="copy-escalation-letter-button">
+                      Copy to clipboard
+                    </button>
+                  </div>
+                )}
+              </div>
             </section>
           )}
 

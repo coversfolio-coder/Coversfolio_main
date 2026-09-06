@@ -609,6 +609,16 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                   </div>
                 )}
 
+                {detailsPolicy.benefits.covered_expense_categories?.length > 0 && (
+                  <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-covered-expenses">
+                    <strong style={{ fontSize: 13 }}>Explicitly covered hospitalization expenses</strong>
+                    <p style={{ fontSize: 11, color: "var(--muted)", margin: "4px 0 6px" }}>If any of these get deducted from a claim without a clause reference, that's worth disputing.</p>
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                      {detailsPolicy.benefits.covered_expense_categories.map((c, i) => <li key={i}>{c}</li>)}
+                    </ul>
+                  </div>
+                )}
+
                 {detailsPolicy.benefits.renewal_reminder && (
                   <div className="attention-strip" data-testid="benefit-renewal-reminder">
                     <div className="attention-icon"><ShieldQuestion size={20} /></div>
@@ -746,6 +756,12 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                   <div className="ai-insights-row">
                     <strong>Key exclusions:</strong>
                     <ul>{aiInsights.key_exclusions.map((ex, i) => <li key={i}>{ex}</li>)}</ul>
+                  </div>
+                )}
+                {aiInsights.covered_expense_categories?.length > 0 && (
+                  <div className="ai-insights-row" data-testid="ai-insights-covered-expenses">
+                    <strong>Explicitly covered hospitalization expenses:</strong>
+                    <ul>{aiInsights.covered_expense_categories.map((c, i) => <li key={i}>{c}</li>)}</ul>
                   </div>
                 )}
               </div>

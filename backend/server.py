@@ -400,6 +400,11 @@ class SettlementInput(BaseModel):
     amount: float = Field(gt=0)
     kind: str = Field(default="partial", pattern="^(partial|final|deduction)$")
     note: str = Field(default="", max_length=500)
+    # Most meaningful for kind="deduction" - what was actually billed for this
+    # item, and whatever justification (if any) the insurer gave for not
+    # paying it. Both optional since not every settlement entry is a dispute.
+    billed_amount: float | None = Field(default=None, gt=0)
+    insurer_reason: str | None = Field(default=None, max_length=500)
 
 
 class StageInput(BaseModel):
@@ -427,6 +432,11 @@ class PolicyCreate(BaseModel):
     start_date: str = Field(min_length=4, max_length=20)
     end_date: str = Field(min_length=4, max_length=20)
     insured_people: List[InsuredPerson] = Field(default_factory=list)
+    # The IRDAI-mandated Unique Identification Number for this specific
+    # insurance product - printed on every policy document. Optional since
+    # older saved policies won't have it, but genuinely useful when citing
+    # the exact product in correspondence with the insurer or IRDAI.
+    uin: str | None = Field(default=None, max_length=40)
     # Optional: carried over from an "Analyze with AI" pass, if the person ran one
     # before saving. Kept loosely-typed (plain dict) rather than importing the
     # PolicyAIAnalysis schema here, since that class is defined further down this
@@ -440,6 +450,7 @@ class PolicyUpdate(BaseModel):
     policy_number: str | None = Field(default=None, min_length=2, max_length=60)
     policy_type: str | None = Field(default=None, pattern="^(Health|Mediclaim|Term Insurance|Life Insurance|Motor Insurance|Travel Insurance|Personal Accident|Critical Illness|Home|Other)$")
     sum_insured: float | None = Field(default=None, gt=0)
+    uin: str | None = Field(default=None, max_length=40)
     start_date: str | None = Field(default=None, min_length=4, max_length=20)
     end_date: str | None = Field(default=None, min_length=4, max_length=20)
     insured_people: List[InsuredPerson] | None = None
@@ -517,6 +528,27 @@ REIMBURSEMENT_QUERY_RULE = (
     "clarification, it must ask for everything it needs within 15 days of receiving your claim, in one go - "
     "not through several separate rounds of requests."
 )
+
+# If a claim gets disputed (deductions, rejection, delay), this is the real,
+# verified three-step escalation path in India - independent of claim type,
+# since it applies to any dispute with an insurer, not just health claims.
+ESCALATION_PATH = [
+    {
+        "step": 1, "label": "Insurer's Grievance Redressal Officer (GRO)",
+        "timeframe": "30 days",
+        "citation": "Every insurer must have a published GRO (on your policy document and website). Under IRDAI's Protection of Policyholders' Interests Regulations, raise your grievance in writing and give them 30 days to respond before escalating.",
+    },
+    {
+        "step": 2, "label": "IRDAI Bima Bharosa",
+        "timeframe": "if GRO response is late or unsatisfactory",
+        "citation": "IRDAI's own grievance portal (bimabharosa.irdai.gov.in, formerly called IGMS). It doesn't decide your claim directly, but formally escalates your complaint and puts the insurer's response under regulatory watch.",
+    },
+    {
+        "step": 3, "label": "Insurance Ombudsman",
+        "timeframe": "within 1 year of the insurer's final reply",
+        "citation": "A free, quasi-judicial forum (cioins.co.in) for disputes up to ₹50 lakh - binding on the insurer if you accept the award, no advocate required, typically resolved in about 90 days. You must first have gone through your insurer's own grievance process. The 1-year filing deadline is strict, so don't wait to escalate if your grievance goes nowhere.",
+    },
+]
 
 
 class SlaStart(BaseModel):
@@ -787,7 +819,7 @@ class PolicyAIAnalysis(BaseModel):
     # earlier in this build (maternity_cover accessed as if it always existed).
     # CURRENT_AI_SCHEMA_VERSION is the source of truth for "latest"; this
     # field records what a given policy was actually analyzed under.
-    schema_version: int = 2
+    schema_version: int = 3
     insurer_name: str | None = None
     policy_number: str | None = None
     policy_type: str | None = None
@@ -804,6 +836,12 @@ class PolicyAIAnalysis(BaseModel):
     restoration_benefit: RestorationBenefit | None = None
     no_claim_bonus: NoClaimBonus | None = None
     other_benefits: list[str] = Field(default_factory=list)
+    # Standard hospitalization expense categories (Surgeon/Consultant fees, OT
+    # charges, Room rent, Nursing, Medicines, Diagnostics, etc.) that this
+    # policy explicitly lists as covered - known upfront, this is exactly the
+    # kind of thing that gets wrongly deducted from a claim without the
+    # policyholder realizing it was actually covered all along.
+    covered_expense_categories: list[str] = Field(default_factory=list)
     summary: str | None = None
 
 
@@ -811,7 +849,7 @@ class PolicyAIAnalysis(BaseModel):
 # under an older version is missing fields outright (not null) - callers that
 # read ai_insights should treat every field access as "may not exist" rather
 # than assuming the current shape, regardless of what this constant says.
-CURRENT_AI_SCHEMA_VERSION = 2
+CURRENT_AI_SCHEMA_VERSION = 3
 
 
 class AIAnalysisUnavailable(Exception):
@@ -857,6 +895,12 @@ Pay particular attention to:
 - Any other named benefit or service explicitly listed - teleconsultation credits, ambulance cover,
   wellness/gym discounts, second-opinion services, home healthcare, and similar - these are the kinds
   of things policyholders pay for but often never use because they don't know they exist
+- Standard hospitalization expense categories this document explicitly lists as covered - things like
+  Surgeon/Anesthetist/Medical Practitioner/Consultant fees, Operation Theatre charges, Room/Boarding
+  charges, Nursing charges, Medicines and consumables, Diagnostic tests, ICU charges, and Blood/Oxygen
+  charges. Many claim disputes happen because a policyholder didn't realize one of these ordinary,
+  in-hospital items was explicitly covered, and it later got wrongly deducted without explanation.
+  Record only the category names this specific document actually uses - don't invent a generic list.
 
 These benefit-related fields matter as much as the exclusions and waiting periods above - the whole
 point is helping someone actually use what they're paying for, not just avoid what's excluded.
@@ -1860,6 +1904,9 @@ def compute_policy_benefits(policy: dict, ai_insights: dict, status_info: dict, 
     if ai_insights.get("other_benefits"):
         result["other_benefits"] = ai_insights["other_benefits"]
 
+    if ai_insights.get("covered_expense_categories"):
+        result["covered_expense_categories"] = ai_insights["covered_expense_categories"]
+
     covered_now, still_waiting = [], []
     for item in ai_insights.get("waiting_periods") or []:
         target = covered_now if item.get("waiting_status", {}).get("covered_now") else still_waiting
@@ -2842,6 +2889,9 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
             {"label": v["label"], "timeframe": f"{v['hours']} hour{'s' if v['hours'] != 1 else ''}" if v["hours"] < 24 else f"{v['hours'] // 24} days", "citation": v["citation"]}
             for v in SLA_DEFINITIONS.values() if claim["type"] in v["applicable_to"]
         ] + ([{"label": "Document requests must come all at once", "timeframe": "within 15 days", "citation": REIMBURSEMENT_QUERY_RULE}] if claim["type"] == "Reimbursement" else []),
+        # If this claim ever gets disputed, this is the real escalation path -
+        # shown regardless of claim type, since a dispute can happen either way.
+        "escalation_path": ESCALATION_PATH,
         # Whatever the last uploaded claim form was matched against, saved so
         # it's still here on reload - a fresh upload replaces this outright,
         # the same way a new document upload replaces an old one.
@@ -3244,13 +3294,100 @@ async def respond_query(claim_id: str, query_id: str, input: QueryResponse, user
 async def add_settlement(claim_id: str, input: SettlementInput, user: dict = Depends(current_user)):
     _require_writer(user)
     await _load_claim(claim_id, user)
-    entry = {"id": str(uuid.uuid4()), "amount": input.amount, "kind": input.kind, "note": input.note, "recorded_by": user.get("name", ""), "at": datetime.now(timezone.utc).isoformat()}
+    entry = {
+        "id": str(uuid.uuid4()), "amount": input.amount, "kind": input.kind, "note": input.note,
+        "billed_amount": input.billed_amount, "insurer_reason": input.insurer_reason,
+        "recorded_by": user.get("name", ""), "at": datetime.now(timezone.utc).isoformat(),
+    }
     update = {"$push": {"settlements": entry}, "$set": {"updated": f"{input.kind.title()} settlement recorded"}}
     if input.kind == "final":
         update["$set"]["status"] = "settled"
     await db.claims.update_one({"id": claim_id, "household_id": user["household_id"]}, update)
     await audit(user, "settlement_recorded", f"Recorded {input.kind} settlement of ₹{int(input.amount):,} on {claim_id}")
     return entry
+
+
+def generate_escalation_letter_text(claim: dict, policy: dict | None, household_name: str, deductions: list[dict], stage: str) -> str:
+    """Builds a structured, clause-demanding dispute letter from real claim/
+    policy/deduction data - the same pattern a well-informed policyholder
+    would write by hand (specific line-item deductions, a demand for exact
+    clause/page references, a clear list of asks), but generated automatically
+    so the person doesn't have to know to ask this precisely themselves."""
+    lines = []
+    if stage == "gro":
+        lines.append("To,\nThe Grievance Redressal Officer,")
+        if policy:
+            lines.append(f"{policy['insurer_name']}\n")
+        opening = "I am writing to formally raise a grievance regarding deductions made in the settlement of my claim, and to request a fresh, item-wise review."
+    else:
+        lines.append("To,\nThe Insurance Ombudsman\n(Office having jurisdiction over my address)\n")
+        opening = (
+            "I am writing to escalate a grievance regarding deductions made in the settlement of my claim. "
+            "I first raised this with the insurer's own Grievance Redressal Officer, and remain unsatisfied with "
+            "the response received (or no response was received within the regulatory timeframe)."
+        )
+
+    lines.append(opening)
+    lines.append("")
+    lines.append("Policy and Claim Details:")
+    if policy:
+        lines.append(f"Insurer: {policy['insurer_name']}")
+        lines.append(f"Policy Number: {policy.get('policy_number', 'N/A')}")
+        lines.append(f"Policy Type: {policy.get('policy_type', 'N/A')}")
+        if policy.get("uin"):
+            lines.append(f"UIN: {policy['uin']}")
+    lines.append(f"Claim Reference: {claim['id']}")
+    lines.append(f"Claim Type: {claim.get('type', 'N/A')}")
+    if claim.get("hospital_name"):
+        lines.append(f"Hospital: {claim['hospital_name']}")
+    lines.append("")
+
+    if deductions:
+        lines.append("The following amounts were billed but deducted or disallowed from my claim, without (or with inadequate) documented justification:")
+        lines.append("")
+        total_deducted = 0.0
+        for i, d in enumerate(deductions, 1):
+            billed = f"₹{d['billed_amount']:,.2f}" if d.get("billed_amount") else "Not recorded"
+            reason = d.get("insurer_reason") or "No reason provided by insurer"
+            desc = d.get("note") or "Deduction"
+            lines.append(f"{i}. {desc}")
+            lines.append(f"   Billed amount: {billed}")
+            lines.append(f"   Amount deducted: ₹{d['amount']:,.2f}")
+            lines.append(f"   Insurer's stated reason: {reason}")
+            lines.append("")
+            total_deducted += d["amount"]
+        lines.append(f"Total amount in dispute: ₹{total_deducted:,.2f}")
+        lines.append("")
+
+    lines.append("I request the following:")
+    lines.append("1. A fresh, item-wise review of every deduction listed above.")
+    lines.append("2. Written justification for each deduction, citing the exact clause and page number of my policy document that supports it.")
+    lines.append("3. Where any of the above items are in fact covered under my policy terms, immediate reconsideration and settlement of the admissible amount.")
+    lines.append("4. A complete, item-wise calculation showing the billed amount, admissible amount, deduction, and the corresponding policy clause for every deduction.")
+    lines.append("")
+    if stage == "gro":
+        lines.append("Under the IRDAI (Protection of Policyholders' Interests) Regulations, I understand this grievance is to be acknowledged within 3 working days and resolved within 30 days. If I do not receive a satisfactory response within this time, I intend to escalate this matter to IRDAI's Bima Bharosa portal and, if necessary, the Insurance Ombudsman.")
+    else:
+        lines.append("I am filing this complaint under the Insurance Ombudsman Rules, 2017, within the applicable time limit, as my grievance with the insurer has not been satisfactorily resolved.")
+    lines.append("")
+    lines.append("I look forward to your prompt attention to this matter.")
+    lines.append("")
+    lines.append("Regards,")
+    lines.append(household_name)
+
+    return "\n".join(lines)
+
+
+@api_router.get("/claims/{claim_id}/escalation-letter")
+async def get_escalation_letter(claim_id: str, stage: str = "gro", user: dict = Depends(current_user)):
+    if stage not in ("gro", "ombudsman"):
+        raise HTTPException(status_code=400, detail="stage must be 'gro' or 'ombudsman'")
+    claim = await _load_claim(claim_id, user)
+    policy = await db.policies.find_one({"id": claim.get("policy_id"), "household_id": user["household_id"]}, {"_id": 0}) if claim.get("policy_id") else None
+    household = await db.households.find_one({"id": user["household_id"]}, {"_id": 0})
+    deductions = [s for s in claim.get("settlements", []) if s.get("kind") == "deduction"]
+    letter = generate_escalation_letter_text(claim, policy, household.get("name", "") if household else "", deductions, stage)
+    return {"letter": letter, "deduction_count": len(deductions), "stage": stage}
 
 
 @api_router.post("/claims/{claim_id}/stage")
