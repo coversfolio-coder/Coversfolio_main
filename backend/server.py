@@ -2597,7 +2597,9 @@ async def upload_document(
 
 
 @api_router.get("/documents/{document_id}/download")
-async def download_document(document_id: str, user: dict = Depends(current_user)):
+async def download_document(document_id: str, disposition: str = "attachment", user: dict = Depends(current_user)):
+    if disposition not in ("attachment", "inline"):
+        raise HTTPException(status_code=400, detail="disposition must be 'attachment' or 'inline'")
     doc = await db.documents.find_one({"id": document_id, "household_id": user["household_id"]}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -2609,14 +2611,17 @@ async def download_document(document_id: str, user: dict = Depends(current_user)
         # server, which is both faster and cheaper at any real scale.
         url = get_s3_client().generate_presigned_url(
             "get_object", Params={"Bucket": S3_BUCKET, "Key": doc["stored_path"],
-                                   "ResponseContentDisposition": f'attachment; filename="{doc["filename"]}"'},
+                                   "ResponseContentDisposition": f'{disposition}; filename="{doc["filename"]}"'},
             ExpiresIn=300,
         )
         return RedirectResponse(url)
     path = Path(doc["stored_path"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="File is no longer available")
-    return FileResponse(path, media_type=doc["content_type"], filename=doc["filename"])
+    return FileResponse(
+        path, media_type=doc["content_type"], filename=doc["filename"],
+        content_disposition_type=disposition,
+    )
 
 
 @api_router.delete("/documents/{document_id}")

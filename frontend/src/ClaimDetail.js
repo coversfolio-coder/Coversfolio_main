@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import client, { API, apiError } from "@/api";
 import {
   X, FileText, MessageSquare, IndianRupee, AlertTriangle,
-  Undo2, Check, Plus, ClipboardList, ShieldAlert, CheckCircle2, Files, Link2, FileSpreadsheet, Trash2, Upload
+  Undo2, Check, Plus, ClipboardList, ShieldAlert, CheckCircle2, Files, Link2, FileSpreadsheet, Trash2, Upload, Eye
 } from "lucide-react";
 
 
@@ -61,6 +61,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   const [uploadingCategory, setUploadingCategory] = useState(null);
   const packetFileInputRef = useRef(null);
   const uploadTargetCategory = useRef(null);
+  const [previewDoc, setPreviewDoc] = useState(null);
   const [claimFormUploadResult, setClaimFormUploadResult] = useState(null);
   const [analyzingClaimForm, setAnalyzingClaimForm] = useState(false);
   const claimFormFileInputRef = useRef(null);
@@ -274,8 +275,23 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                       </ul>
                     )}
                     {section.attached.length > 0 && (
-                      <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
-                        {section.attached.map((d) => <li key={d.id} style={{ fontSize: 11 }}>{d.filename}</li>)}
+                      <ul style={{ margin: "8px 0 0", paddingLeft: 0, listStyle: "none" }}>
+                        {section.attached.map((d) => (
+                          <li key={d.id} style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
+                            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {d.filename}
+                              {(d.bill_amount || d.bill_date || d.uploaded_at) && (
+                                <span style={{ color: "var(--muted)" }}>
+                                  {" · "}
+                                  {d.bill_amount ? `₹${Number(d.bill_amount).toLocaleString("en-IN")}` : ""}
+                                  {d.bill_amount && d.bill_date ? " · " : ""}
+                                  {d.bill_date ? new Date(d.bill_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : (d.uploaded_at ? `uploaded ${new Date(d.uploaded_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}` : "")}
+                                </span>
+                              )}
+                            </span>
+                            <button type="button" className="icon-button" aria-label="Preview" style={{ width: 24, height: 24 }} onClick={() => setPreviewDoc(d)} data-testid={`preview-packet-document-${d.id}`}><Eye size={13} /></button>
+                          </li>
+                        ))}
                       </ul>
                     )}
                     {section.status === "suggested" && section.suggested.map((d) => (
@@ -826,6 +842,36 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
           )}
         </div>
       </div>
+
+      {previewDoc && (
+        <div className="modal-overlay" onClick={() => setPreviewDoc(null)}>
+          <div className="modal-panel" style={{ maxWidth: 800, width: "92vw" }} onClick={(e) => e.stopPropagation()} data-testid="claim-document-preview-modal">
+            <button className="close-button" aria-label="Close" onClick={() => setPreviewDoc(null)} data-testid="close-claim-preview-modal-button"><X size={18} /></button>
+            <p className="eyebrow">PREVIEW</p>
+            <h2 style={{ fontSize: 16 }}>{previewDoc.filename}</h2>
+            {previewDoc.content_type?.startsWith("image/") ? (
+              <img
+                src={`${API}/documents/${previewDoc.id}/download?disposition=inline`}
+                alt={previewDoc.filename}
+                style={{ width: "100%", maxHeight: "70vh", objectFit: "contain", borderRadius: 8, background: "var(--canvas)", marginTop: 12 }}
+                data-testid="claim-preview-image"
+              />
+            ) : previewDoc.content_type === "application/pdf" ? (
+              <iframe
+                src={`${API}/documents/${previewDoc.id}/download?disposition=inline`}
+                title={previewDoc.filename}
+                style={{ width: "100%", height: "70vh", border: "1px solid var(--line)", borderRadius: 8, marginTop: 12 }}
+                data-testid="claim-preview-pdf"
+              />
+            ) : (
+              <div className="empty-hint" style={{ marginTop: 12 }} data-testid="claim-preview-unsupported">
+                Preview isn't available for this file type.{" "}
+                <a href={`${API}/documents/${previewDoc.id}/download`} target="_blank" rel="noreferrer">Download it instead</a>.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

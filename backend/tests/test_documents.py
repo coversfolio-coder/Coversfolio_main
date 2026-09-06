@@ -62,3 +62,22 @@ def test_classify_does_not_save_anything(registered_user):
     client.post("/api/documents/classify", files={"file": ("bill.png", img, "image/png")})
     r = client.get("/api/documents")
     assert len(r.json()["documents"]) == 0
+
+
+def test_download_inline_mode_for_preview(registered_user):
+    """Preview needs the browser to render inline rather than force a download
+    dialog - confirms the disposition query param actually controls this."""
+    client, user = registered_user
+    r = client.post("/api/documents", files={"file": ("bill.pdf", b"%PDF-1.4 fake pdf content", "application/pdf")}, data={"category": "hospital_bill"})
+    doc_id = r.json()["id"]
+    r = client.get(f"/api/documents/{doc_id}/download", params={"disposition": "inline"})
+    assert r.status_code == 200
+    assert "inline" in r.headers["content-disposition"]
+
+
+def test_download_rejects_bad_disposition(registered_user):
+    client, user = registered_user
+    r = client.post("/api/documents", files={"file": ("bill.pdf", b"%PDF-1.4 fake", "application/pdf")}, data={"category": "hospital_bill"})
+    doc_id = r.json()["id"]
+    r = client.get(f"/api/documents/{doc_id}/download", params={"disposition": "bogus"})
+    assert r.status_code == 400

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import client, { API, apiError } from "@/api";
-import { ArrowUpRight, BookOpen, Download, FileScan, FileText, Trash2, Upload, X } from "lucide-react";
+import { ArrowUpRight, BookOpen, Download, Eye, FileScan, FileText, Trash2, Upload, X } from "lucide-react";
 
 const DOCUMENT_CATEGORIES = [
   { id: "policy_document", label: "Policy document" },
@@ -45,6 +45,7 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
   const [billDate, setBillDate] = useState("");
   const [ocrBusyId, setOcrBusyId] = useState(null);
   const [ocrResults, setOcrResults] = useState({}); // { [docId]: { text, method } }
+  const [previewDoc, setPreviewDoc] = useState(null);
   const inputRef = useRef(null);
 
   const runOcr = async (docId) => {
@@ -230,8 +231,15 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
                     <span className="claim-icon" style={{ width: 32, height: 32 }}><FileText size={15} /></span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <strong style={{ display: "block" }}>{doc.filename}</strong>
-                      <small>{fileSize(doc.size)} · Uploaded by {doc.uploaded_by_name}</small>
+                      <small>
+                        {doc.bill_amount ? `₹${Number(doc.bill_amount).toLocaleString("en-IN")}` : null}
+                        {doc.bill_amount && doc.bill_date ? " · " : null}
+                        {doc.bill_date ? new Date(doc.bill_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : null}
+                        {(doc.bill_amount || doc.bill_date) ? " · " : null}
+                        {fileSize(doc.size)} · Uploaded {doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : ""} by {doc.uploaded_by_name}
+                      </small>
                     </div>
+                    <button className="icon-button" aria-label="Preview" data-testid={`preview-document-${doc.id}`} onClick={() => setPreviewDoc(doc)}><Eye size={15} /></button>
                     <button className="icon-button" aria-label="Extract text" disabled={ocrBusyId === doc.id} data-testid={`ocr-document-${doc.id}`} onClick={() => runOcr(doc.id)}><FileScan size={15} className={ocrBusyId === doc.id ? "spin-icon" : ""} /></button>
                     <button className="icon-button" aria-label="Download" data-testid={`download-document-${doc.id}`} onClick={() => download(doc)}><Download size={15} /></button>
                     {canEdit && <button className="icon-button" aria-label="Remove document" data-testid={`remove-document-${doc.id}`} onClick={() => remove(doc.id)}><Trash2 size={15} /></button>}
@@ -305,6 +313,40 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
                 {uploading ? "Uploading…" : "Upload"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {previewDoc && (
+        <div className="modal-overlay" onClick={() => setPreviewDoc(null)}>
+          <div className="modal-panel" style={{ maxWidth: 800, width: "92vw" }} onClick={(e) => e.stopPropagation()} data-testid="document-preview-modal">
+            <button className="close-button" aria-label="Close" onClick={() => setPreviewDoc(null)} data-testid="close-preview-modal-button"><X size={18} /></button>
+            <p className="eyebrow">PREVIEW</p>
+            <h2 style={{ fontSize: 16 }}>{previewDoc.filename}</h2>
+            <small style={{ display: "block", marginBottom: 14, color: "var(--muted)" }}>
+              {previewDoc.bill_amount ? `₹${Number(previewDoc.bill_amount).toLocaleString("en-IN")} · ` : ""}
+              {previewDoc.bill_date ? `${new Date(previewDoc.bill_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} · ` : ""}
+              {CATEGORY_LABEL[previewDoc.category] || previewDoc.category}
+            </small>
+            {previewDoc.content_type?.startsWith("image/") ? (
+              <img
+                src={`${API}/documents/${previewDoc.id}/download?disposition=inline`}
+                alt={previewDoc.filename}
+                style={{ width: "100%", maxHeight: "70vh", objectFit: "contain", borderRadius: 8, background: "var(--canvas)" }}
+                data-testid="preview-image"
+              />
+            ) : previewDoc.content_type === "application/pdf" ? (
+              <iframe
+                src={`${API}/documents/${previewDoc.id}/download?disposition=inline`}
+                title={previewDoc.filename}
+                style={{ width: "100%", height: "70vh", border: "1px solid var(--line)", borderRadius: 8 }}
+                data-testid="preview-pdf"
+              />
+            ) : (
+              <div className="empty-hint" data-testid="preview-unsupported">
+                Preview isn't available for this file type. <button type="button" className="text-button" style={{ padding: 0 }} onClick={() => download(previewDoc)}>Download it instead</button>.
+              </div>
+            )}
           </div>
         </div>
       )}
