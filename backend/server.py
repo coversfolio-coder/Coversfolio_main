@@ -1578,6 +1578,28 @@ async def admin_stats(user: dict = Depends(current_user)):
     }
 
 
+@api_router.get("/admin/users")
+async def admin_list_users(user: dict = Depends(current_user)):
+    """Per-user detail for platform admins - name, email, household, role,
+    and activity dates. Never returns password_hash or any other credential."""
+    if not is_platform_admin(user):
+        raise HTTPException(status_code=403, detail="Not authorized to view platform users")
+
+    households = {h["id"]: h["name"] async for h in db.households.find({}, {"_id": 0, "id": 1, "name": 1})}
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(5000)
+    return {
+        "users": [
+            {
+                "id": u["id"], "name": u.get("name", ""), "email": u.get("email", ""),
+                "household_name": households.get(u.get("household_id"), "—"),
+                "role": u.get("role", ""), "created_at": u.get("created_at"),
+                "last_login": u.get("last_login"), "is_platform_admin": is_platform_admin(u),
+            }
+            for u in users
+        ],
+    }
+
+
 def regulatory_note_for_claim_type(claim_type: str) -> str:
     """One short, static reference line per claim type - the headline fact a
     person would want visible at a glance, not the full Know Your Rights list.

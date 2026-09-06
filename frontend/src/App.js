@@ -635,15 +635,19 @@ function App() {
   };
 
   const [adminStats, setAdminStats] = useState(null);
+  const [adminUsers, setAdminUsers] = useState(null);
   const [adminStatsOpen, setAdminStatsOpen] = useState(false);
   const [landingStatsEdit, setLandingStatsEdit] = useState(null);
   const [savingLandingStats, setSavingLandingStats] = useState(false);
   const openAdminStats = async () => {
     setAdminStatsOpen(true);
     setAdminStats(null);
+    setAdminUsers(null);
     try {
       const res = await client.get("/admin/stats");
       setAdminStats(res.data);
+      const usersRes = await client.get("/admin/users");
+      setAdminUsers(usersRes.data.users);
       const statsRes = await client.get("/public/landing-stats");
       setLandingStatsEdit(statsRes.data.stats);
     } catch (err) { notify(apiError(err), true); setAdminStatsOpen(false); }
@@ -937,6 +941,41 @@ function App() {
               {adminStats.users.never_logged_in > 0 && (
                 <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>{adminStats.users.never_logged_in} user{adminStats.users.never_logged_in === 1 ? "" : "s"} signed up before login tracking started and haven't logged in since - not counted as active until their next login.</p>
               )}
+
+              <div style={{ borderTop: "1px solid var(--line)", marginTop: 22, paddingTop: 18 }}>
+                <p className="eyebrow">USERS</p>
+                <h3 style={{ margin: "0 0 10px", fontSize: 15 }}>Everyone on Coversfolio ({adminUsers?.length ?? "…"})</h3>
+                {!adminUsers ? (
+                  <p className="readonly-hint">Loading…</p>
+                ) : (
+                  <div style={{ maxHeight: 320, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8 }} data-testid="admin-users-table">
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                      <thead>
+                        <tr style={{ position: "sticky", top: 0, background: "var(--canvas)" }}>
+                          <th style={{ textAlign: "left", padding: "8px 10px" }}>Name</th>
+                          <th style={{ textAlign: "left", padding: "8px 10px" }}>Email</th>
+                          <th style={{ textAlign: "left", padding: "8px 10px" }}>Household</th>
+                          <th style={{ textAlign: "left", padding: "8px 10px" }}>Role</th>
+                          <th style={{ textAlign: "left", padding: "8px 10px" }}>Joined</th>
+                          <th style={{ textAlign: "left", padding: "8px 10px" }}>Last login</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminUsers.map((u) => (
+                          <tr key={u.id} style={{ borderTop: "1px solid var(--line-soft)" }} data-testid={`admin-user-row-${u.id}`}>
+                            <td style={{ padding: "8px 10px" }}>{u.name}{u.is_platform_admin && <span className="chip chip-neutral" style={{ marginLeft: 6, fontSize: 9 }}>admin</span>}</td>
+                            <td style={{ padding: "8px 10px" }}>{u.email}</td>
+                            <td style={{ padding: "8px 10px" }}>{u.household_name}</td>
+                            <td style={{ padding: "8px 10px" }}>{u.role}</td>
+                            <td style={{ padding: "8px 10px" }}>{u.created_at ? new Date(u.created_at).toLocaleDateString("en-IN") : "—"}</td>
+                            <td style={{ padding: "8px 10px" }}>{u.last_login ? new Date(u.last_login).toLocaleDateString("en-IN") : "Never"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
 
               <div style={{ borderTop: "1px solid var(--line)", marginTop: 22, paddingTop: 18 }}>
                 <p className="eyebrow">LANDING PAGE</p>
