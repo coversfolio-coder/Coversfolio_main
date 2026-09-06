@@ -266,3 +266,75 @@ def test_no_excess_when_room_within_limit(registered_user):
     assert data["correct_deduction_on_associated_expenses"] == 0.0
     assert data["room_rent_excess_per_day"] == 0.0
     print("No deduction when within room rent limit, correctly capped at ratio 1.0")
+from conftest import make_policy, make_claim
+
+def test_maternity_claim_includes_prenatal_postnatal_checklist(registered_user):
+    client, user = registered_user
+    policy = make_policy(client)
+    claim = make_claim(client, claim_type="Reimbursement", policy_id=policy["id"])
+    client.put(f"/api/claims/{claim['id']}/hospitalization", json={"is_maternity": True})
+
+    r = client.get(f"/api/claims/{claim['id']}/document-packet")
+    assert r.status_code == 200
+    categories = [s["category"] for s in r.json()["sections"]]
+    assert "obstetric_history" in categories
+    assert "prenatal_records" in categories
+    assert "postnatal_records" in categories
+
+    sections_by_cat = {s["category"]: s for s in r.json()["sections"]}
+    postnatal = sections_by_cat["postnatal_records"]
+    assert postnatal["guidance"]["supplementary"] is True
+    assert "later" in postnatal["guidance"]["supplementary_note"]
+    print("Maternity checklist correctly includes pre/post-natal with supplementary note:", postnatal["guidance"]["supplementary_note"])
+
+def test_non_maternity_claim_excludes_maternity_checklist(registered_user):
+    client, user = registered_user
+    policy = make_policy(client)
+    claim = make_claim(client, claim_type="Reimbursement", policy_id=policy["id"])
+    r = client.get(f"/api/claims/{claim['id']}/document-packet")
+    categories = [s["category"] for s in r.json()["sections"]]
+    assert "prenatal_records" not in categories
+    assert "postnatal_records" not in categories
+    print("Non-maternity claim correctly excludes maternity-specific checklist items")
+from conftest import make_policy, make_claim
+
+def _upload_doc(client, filename, category, bill_date):
+    r = client.post("/api/documents", files={"file": (filename, b"fake content", "application/pdf")}, data={"category": category, "bill_date": bill_date, "bill_amount": "500"})
+    return r.json()["id"]
+
+def test_prenatal_documents_grouped_by_visit_with_window_check(registered_user):
+    """Reproduces the real pattern from an actual uploaded example: multiple
+    documents (consultation, lab report) from the same visit date, which
+    should group together - and checked against the policy's stated
+    pre-natal window relative to the claim's admission date."""
+    client, user = registered_user
+    policy = make_policy(client)
+    client.put(f"/api/policies/{policy['id']}", json={
+        "ai_insights": {"schema_version": 5, "maternity_cover": {"covered": True, "pre_natal_days": 30, "post_natal_days": 60}},
+    })
+    claim = make_claim(client, claim_type="Reimbursement", policy_id=policy["id"])
+    client.put(f"/api/claims/{claim['id']}/hospitalization", json={"is_maternity": True, "admission_date": "2026-05-25"})
+
+    # May 20 is 5 days before May 25 - clearly within a 30-day window
+    doc1 = _upload_doc(client, "consultation_may20.pdf", "prenatal_records", "2026-05-20")
+    doc2 = _upload_doc(client, "lab_report_may20.pdf", "prenatal_records", "2026-05-20")
+    for d in (doc1, doc2):
+        r = client.post(f"/api/documents/{d}/link", json={"linked_claim_id": claim["id"]})
+        assert r.status_code == 200, r.text
+    # Jan 1 is well over 30 days before May 25 - outside the window
+    doc3 = _upload_doc(client, "old_consultation.pdf", "prenatal_records", "2026-01-01")
+    r = client.post(f"/api/documents/{doc3}/link", json={"linked_claim_id": claim["id"]})
+    assert r.status_code == 200, r.text
+
+    r = client.get(f"/api/claims/{claim['id']}/document-packet")
+    assert r.status_code == 200, r.text
+    prenatal_section = next(s for s in r.json()["sections"] if s["category"] == "prenatal_records")
+    groups = prenatal_section["visit_groups"]
+
+    may20_group = next(g for g in groups if g["visit_date"] == "2026-05-20")
+    assert len(may20_group["documents"]) == 2
+    assert may20_group["window_status"] == "within_window"
+
+    jan1_group = next(g for g in groups if g["visit_date"] == "2026-01-01")
+    assert jan1_group["window_status"] == "outside_window"
+    print("Visit grouping and window check both correct:", [(g["visit_date"], len(g["documents"]), g["window_status"]) for g in groups])

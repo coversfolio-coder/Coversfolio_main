@@ -230,6 +230,8 @@ DOCUMENT_CATEGORIES = {
     "claim_settlement": "Claim settlement",
     "id_proof": "ID proof",
     "obstetric_history": "Obstetric history (maternity claims)",
+    "prenatal_records": "Pre-natal records (maternity claims)",
+    "postnatal_records": "Post-natal records (maternity claims)",
     "claim_form": "Insurer claim form",
     "purchase_receipt": "Purchase receipt",
     "general": "Other",
@@ -271,6 +273,20 @@ CATEGORY_GUIDANCE = {
     "obstetric_history": {
         "description": "A note from the treating doctor covering Gravida/Para/Living children/Abortions history - part of the hospital's own Claim Form Part B for maternity claims.",
     },
+    "prenatal_records": {
+        "description": "Doctor/obstetrician consultation notes and prescriptions, diagnostic test reports (ultrasounds, blood tests), and pharmacy bills for prenatal vitamins or prescribed medicines - from before admission. Insurers want the doctor's name and clinic details clearly on each document.",
+    },
+    "postnatal_records": {
+        "description": "Follow-up consultation records for the mother, and the newborn's vaccination/immunization bills and records, plus any post-delivery medicine bills - from after discharge.",
+        # Most standard claim forms include a "post-hospitalization expenses"
+        # section and a declaration explicitly allowing this to come in as a
+        # supplementary claim - because post-natal care often isn't even
+        # finished yet when the main claim gets filed. Surfaced so people
+        # don't feel like their claim is incomplete just because these aren't
+        # ready yet.
+        "supplementary": True,
+        "supplementary_note": "This is normally fine to submit after your main claim - many insurers' own forms expect post-natal follow-ups as a separate, later submission, since this care often isn't finished yet when you file.",
+    },
 }
 
 # The order insurers commonly expect documents in, per claim type - drawn from
@@ -288,7 +304,7 @@ CLAIM_DOCUMENT_ORDER = {
 # Abortions) from the treating doctor, submitted as part of the hospital's own
 # Claim Form Part B. Added conditionally, not for every claim, since it's
 # specific to this claim category.
-MATERNITY_EXTRA_CHECKLIST = ["obstetric_history"]
+MATERNITY_EXTRA_CHECKLIST = ["obstetric_history", "prenatal_records", "postnatal_records"]
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -2732,11 +2748,13 @@ async def get_claim_document_packet(claim_id: str, user: dict = Depends(current_
     if claim.get("is_maternity"):
         order += [cat for cat in MATERNITY_EXTRA_CHECKLIST if cat not in order]
 
+    policy = None
     if claim.get("policy_id"):
         policy = await db.policies.find_one({"id": claim["policy_id"], "household_id": user["household_id"]}, {"_id": 0})
         maternity = (policy.get("ai_insights") or {}).get("maternity_cover") if policy else None
         if maternity and maternity.get("covered"):
             order = order + MATERNITY_EXTRA_CHECKLIST
+    maternity_cover = (policy.get("ai_insights") or {}).get("maternity_cover") if policy else None
 
     linked_docs = await db.documents.find({"household_id": user["household_id"], "linked_claim_id": claim_id}, {"_id": 0}).to_list(200)
     linked_by_category: dict = {}
@@ -2755,14 +2773,30 @@ async def get_claim_document_packet(claim_id: str, user: dict = Depends(current_
     for category in order:
         attached = linked_by_category.get(category, [])
         suggested = [] if attached else suggestions_by_category.get(category, [])
-        sections.append({
+        section = {
             "category": category,
             "label": DOCUMENT_CATEGORIES.get(category, category),
             "attached": attached,
             "suggested": suggested,
             "status": "attached" if attached else ("suggested" if suggested else "missing"),
             "guidance": CATEGORY_GUIDANCE.get(category),
-        })
+        }
+        # Real visits often produce several documents on the same day (a
+        # receipt, a prescription, a lab report) - grouping by visit date, and
+        # flagging whether each visit actually falls inside this policy's
+        # stated pre/post-natal window, makes both of those visible at a
+        # glance instead of a flat, undifferentiated document list.
+        if category == "prenatal_records" and attached:
+            section["visit_groups"] = group_documents_by_visit(
+                attached, claim.get("admission_date"),
+                maternity_cover.get("pre_natal_days") if maternity_cover else None, "pre",
+            )
+        elif category == "postnatal_records" and attached:
+            section["visit_groups"] = group_documents_by_visit(
+                attached, claim.get("discharge_date"),
+                maternity_cover.get("post_natal_days") if maternity_cover else None, "post",
+            )
+        sections.append(section)
 
     complete_count = sum(1 for s in sections if s["status"] == "attached")
     return {"sections": sections, "complete_count": complete_count, "total_count": len(sections)}
@@ -2812,6 +2846,48 @@ def bucket_bill_date(bill_date: str | None, admission_date: str | None, discharg
     if bill > discharge:
         return "post_hospitalization"
     return "hospitalization"
+
+
+def check_maternity_window(doc_date_str: str | None, anchor_date_str: str | None, window_days: float | None, phase: str) -> str:
+    """Checks a document's date against the policy's own stated pre/post-natal
+    expense window (e.g. '30 days before admission') - a different, more
+    specific question than bucket_bill_date's generic before/during/after
+    split, since a document can be genuinely 'pre-hospitalization' but still
+    fall outside the specific number of days this policy actually covers."""
+    if not doc_date_str or not anchor_date_str or window_days is None:
+        return "unknown"
+    try:
+        doc_date = datetime.strptime(doc_date_str, "%Y-%m-%d")
+        anchor = datetime.strptime(anchor_date_str, "%Y-%m-%d")
+    except ValueError:
+        return "unknown"
+    if phase == "pre":
+        window_start = anchor - timedelta(days=window_days)
+        return "within_window" if window_start <= doc_date <= anchor else "outside_window"
+    else:
+        window_end = anchor + timedelta(days=window_days)
+        return "within_window" if anchor <= doc_date <= window_end else "outside_window"
+
+
+def group_documents_by_visit(documents: list[dict], anchor_date: str | None, window_days: float | None, phase: str) -> list[dict]:
+    """Groups documents by date - real-world visits often produce several
+    separate documents on the same day (an OPD receipt, a consultation
+    prescription, a lab report, a pharmacy bill), and showing them as one
+    visit bundle rather than a flat, undifferentiated list makes it obvious
+    what belongs together and what's still missing for a given visit."""
+    groups: dict[str, list[dict]] = {}
+    for doc in documents:
+        date_key = doc.get("bill_date") or (doc.get("uploaded_at") or "")[:10] or "Date unknown"
+        groups.setdefault(date_key, []).append(doc)
+
+    result = []
+    for date_key in sorted(groups.keys()):
+        result.append({
+            "visit_date": date_key,
+            "documents": groups[date_key],
+            "window_status": check_maternity_window(date_key if date_key != "Date unknown" else None, anchor_date, window_days, phase),
+        })
+    return result
 
 
 @api_router.get("/claims/{claim_id}/claim-form")

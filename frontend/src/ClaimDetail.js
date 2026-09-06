@@ -283,12 +283,15 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                         {section.status === "attached" ? <CheckCircle2 size={15} /> : <Files size={15} />}
                       </span>
                       <div style={{ flex: 1 }}><strong>{section.label}</strong></div>
-                      <span className={`chip chip-${section.status === "attached" ? "teal" : section.status === "suggested" ? "amber" : "neutral"}`}>
-                        {section.status === "attached" ? "Attached" : section.status === "suggested" ? "Suggested" : "Missing"}
+                      <span className={`chip chip-${section.status === "attached" ? "teal" : section.guidance?.supplementary && section.status === "missing" ? "neutral" : section.status === "suggested" ? "amber" : "neutral"}`}>
+                        {section.status === "attached" ? "Attached" : section.status === "missing" && section.guidance?.supplementary ? "Can add later" : section.status === "suggested" ? "Suggested" : "Missing"}
                       </span>
                     </header>
                     {section.guidance?.description && (
                       <p style={{ fontSize: 11, color: "var(--muted)", margin: "8px 0 0", lineHeight: 1.5 }} data-testid={`packet-guidance-${section.category}`}>{section.guidance.description}</p>
+                    )}
+                    {section.guidance?.supplementary && section.guidance?.supplementary_note && (
+                      <p style={{ fontSize: 11, color: "var(--teal)", margin: "6px 0 0", lineHeight: 1.5 }} data-testid={`packet-supplementary-note-${section.category}`}>{section.guidance.supplementary_note}</p>
                     )}
                     {section.guidance?.accepted_types && (
                       <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 11, color: "var(--muted)" }} data-testid={`packet-accepted-types-${section.category}`}>
@@ -297,7 +300,32 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                         ))}
                       </ul>
                     )}
-                    {section.attached.length > 0 && (
+                    {section.visit_groups ? (
+                      <div style={{ margin: "10px 0 0" }} data-testid={`visit-groups-${section.category}`}>
+                        {section.visit_groups.map((group) => (
+                          <div key={group.visit_date} className="entry" style={{ marginBottom: 8, padding: "10px 12px" }} data-testid={`visit-group-${section.category}-${group.visit_date}`}>
+                            <header style={{ marginBottom: 6 }}>
+                              <strong style={{ fontSize: 11.5, flex: 1 }}>
+                                {group.visit_date === "Date unknown" ? "Date unknown" : new Date(group.visit_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                              </strong>
+                              {group.window_status === "within_window" && <span className="chip chip-teal">Within covered window</span>}
+                              {group.window_status === "outside_window" && <span className="chip chip-red">Outside covered window</span>}
+                            </header>
+                            {group.documents.map((d) => (
+                              <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>
+                                  {d.filename}{d.bill_amount ? ` · ₹${Number(d.bill_amount).toLocaleString("en-IN")}` : ""}
+                                </span>
+                                <button type="button" className="icon-button" aria-label="Preview" title="Preview" style={{ width: 22, height: 22 }} onClick={() => setPreviewDoc(d)} data-testid={`preview-visit-document-${d.id}`}><Eye size={12} /></button>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                        {section.visit_groups.some((g) => g.window_status === "outside_window") && (
+                          <p style={{ fontSize: 10, color: "var(--muted)", margin: "4px 0 0" }}>"Outside covered window" is based on this policy's stated window and your claim's admission/discharge dates - always check your actual policy wording too.</p>
+                        )}
+                      </div>
+                    ) : section.attached.length > 0 && (
                       <ul style={{ margin: "8px 0 0", paddingLeft: 0, listStyle: "none" }}>
                         {section.attached.map((d) => (
                           <li key={d.id} style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
