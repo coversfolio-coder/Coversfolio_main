@@ -977,6 +977,124 @@ def analyze_claim_form_with_gemini(file_bytes: bytes, mime_type: str, known_data
     raise AIAnalysisFailed(str(last_exc))
 
 
+class DocumentClassification(BaseModel):
+    category: str = Field(description="Exactly one of: policy_document, discharge_summary, hospital_bill, consultation, pharmacy_bill, opd_receipt, claim_settlement, id_proof, obstetric_history, claim_form, purchase_receipt, general")
+    bill_amount: float | None = Field(default=None, description="The total amount on this document, only if it is a bill or receipt - null otherwise")
+    bill_date: str | None = Field(default=None, description="The date on this document in YYYY-MM-DD format, if identifiable - null otherwise")
+
+
+VALID_DOCUMENT_CATEGORIES = {
+    "policy_document", "discharge_summary", "hospital_bill", "consultation", "pharmacy_bill",
+    "opd_receipt", "claim_settlement", "id_proof", "obstetric_history", "claim_form", "purchase_receipt", "general",
+}
+
+DOCUMENT_CLASSIFY_PROMPT = """You are looking at a photo or scan of a document related to an Indian health insurance claim.
+
+Identify which ONE category it best matches:
+- policy_document: an insurance policy schedule/certificate
+- discharge_summary: a hospital discharge summary
+- hospital_bill: an itemized hospital/inpatient bill
+- consultation: doctor consultation notes or a prescription
+- pharmacy_bill: a pharmacy or medicine bill
+- opd_receipt: an outpatient consultation/test receipt
+- claim_settlement: an insurer's claim settlement letter
+- id_proof: a government ID (PAN, Aadhaar, Voter ID, Passport, Driving Licence)
+- obstetric_history: a maternity/obstetric history note
+- claim_form: a blank or filled insurer claim form
+- purchase_receipt: a receipt for a purchased item (e.g. for home inventory/evidence)
+- general: anything that doesn't clearly fit the above
+
+If it's a bill or receipt, also extract the total amount (as a plain number) and the date on the document
+(in YYYY-MM-DD format). If it's not a bill/receipt, or you can't find these, leave them null. Do not guess -
+only fill in what you can actually read on the document."""
+
+
+def classify_document_with_gemini(file_bytes: bytes, mime_type: str) -> dict:
+    if not GEMINI_API_KEY:
+        raise AIAnalysisUnavailable("AI analysis is not configured on this server")
+
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=45_000))
+    max_attempts = 2
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type), DOCUMENT_CLASSIFY_PROMPT],
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=DocumentClassification,
+                    temperature=0.1,
+                ),
+            )
+            parsed = DocumentClassification.model_validate_json(response.text)
+            result = parsed.model_dump()
+            if result["category"] not in VALID_DOCUMENT_CATEGORIES:
+                result["category"] = "general"
+            return result
+        except genai_errors.ServerError as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            raise AIAnalysisFailed("Gemini didn't respond in time") from exc
+        except Exception as exc:
+            raise AIAnalysisFailed(str(exc)) from exc
+
+    raise AIAnalysisFailed(str(last_exc))
+
+
+# Keyword categories checked in order - first match wins. Deliberately checks
+# more specific/distinctive phrases (e.g. "discharge summary") before generic
+# ones, so a document doesn't get miscategorized by a coincidental word match.
+CLASSIFY_KEYWORD_RULES = [
+    ("discharge_summary", ["discharge summary", "discharge card"]),
+    ("id_proof", ["permanent account number", "income tax department", "election commission of india", "aadhaar", "passport no", "driving licence", "driving license"]),
+    ("policy_document", ["policy schedule", "certificate of insurance", "policy certificate"]),
+    ("pharmacy_bill", ["pharmacy", "chemist", "medical store"]),
+    ("hospital_bill", ["hospital bill", "inpatient bill", "final bill", "ipd bill"]),
+    ("opd_receipt", ["opd receipt", "outpatient receipt", "consultation receipt"]),
+    ("consultation", ["consultation", "prescription", "rx"]),
+    ("claim_settlement", ["settlement letter", "claim settled", "settlement advice"]),
+    ("obstetric_history", ["obstetric", "gravida", "para", "lscs"]),
+]
+
+
+def classify_document_fallback(text: str) -> dict:
+    """No-AI fallback: keyword-based category guess, plus best-effort amount
+    and date extraction via regex/dateutil. Deliberately conservative - if
+    nothing matches confidently, this leaves fields null rather than guessing,
+    consistent with how the rest of this app degrades without AI configured."""
+    lower = text.lower()
+    category = "general"
+    for cat, keywords in CLASSIFY_KEYWORD_RULES:
+        if any(k in lower for k in keywords):
+            category = cat
+            break
+
+    bill_amount = None
+    amounts = [float(m.replace(",", "")) for m in re.findall(r"(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)", lower, re.IGNORECASE) if m]
+    if amounts:
+        bill_amount = max(amounts)
+
+    bill_date = None
+    date_pattern = r"\b\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}\b|\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4}\b"
+    date_match = re.search(date_pattern, text, re.IGNORECASE)
+    if date_match:
+        try:
+            from dateutil import parser as date_parser
+            parsed_date = date_parser.parse(date_match.group(), fuzzy=True, dayfirst=True)
+            # Sanity-check: reject an obviously-wrong year (e.g. a stray
+            # number elsewhere in the match confusing the parser).
+            if 2015 <= parsed_date.year <= datetime.now(timezone.utc).year + 1:
+                bill_date = parsed_date.strftime("%Y-%m-%d")
+        except Exception:
+            bill_date = None
+
+    return {"category": category, "bill_amount": bill_amount, "bill_date": bill_date}
+
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -1831,6 +1949,43 @@ async def ocr_extract(file: UploadFile = File(...), user: dict = Depends(current
 
     await audit(user, "ocr_extracted", f"Extracted text from '{file.filename}' via {result['method']}")
     return result
+
+
+@api_router.post("/documents/classify")
+async def classify_document(file: UploadFile = File(...), user: dict = Depends(current_user)):
+    """Reads an about-to-be-uploaded document and suggests its category plus
+    (for bills/receipts) the amount and date - a suggestion to pre-fill the
+    upload form, not a final answer. Nothing is saved here; the person still
+    reviews and confirms before the actual upload happens."""
+    if file.content_type not in OCR_SUPPORTED_TYPES:
+        raise HTTPException(status_code=415, detail="Upload a PDF or a JPG/PNG/WEBP/HEIC image")
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File is too large. Maximum size is {MAX_UPLOAD_BYTES // (1024*1024)}MB")
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+
+    mime_type = "application/pdf" if file.content_type == "application/pdf" else file.content_type
+
+    if GEMINI_API_KEY:
+        try:
+            result = await asyncio.to_thread(classify_document_with_gemini, contents, mime_type)
+            return {**result, "method": "gemini_vision"}
+        except (AIAnalysisUnavailable, AIAnalysisFailed) as exc:
+            logger.warning("Gemini document classification failed, falling back to keyword matching: %s", exc)
+
+    # No AI configured, or it just failed - fall back to OCR + keyword/regex matching
+    # so the feature still suggests something useful rather than nothing at all.
+    try:
+        ocr_result = await asyncio.to_thread(
+            ocr_module.extract_text, file.filename or "", file.content_type, contents,
+            gemini_api_key=None, gemini_model=GEMINI_MODEL,
+        )
+    except ocr_module.OCRError:
+        return {"category": "general", "bill_amount": None, "bill_date": None, "method": "none"}
+
+    fallback_result = classify_document_fallback(ocr_result["text"])
+    return {**fallback_result, "method": "keyword_match"}
 
 
 @api_router.post("/documents/{document_id}/ocr")

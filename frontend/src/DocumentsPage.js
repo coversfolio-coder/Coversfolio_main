@@ -37,6 +37,8 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [pendingFile, setPendingFile] = useState(null);
   const [uploadCategory, setUploadCategory] = useState("general");
+  const [classifying, setClassifying] = useState(false);
+  const [classifiedMethod, setClassifiedMethod] = useState(null);
   const [uploadPolicyId, setUploadPolicyId] = useState("");
   const [uploadClaimId, setUploadClaimId] = useState("");
   const [billAmount, setBillAmount] = useState("");
@@ -81,7 +83,26 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
     setUploadClaimId("");
     setBillAmount("");
     setBillDate("");
+    setClassifiedMethod(null);
     setShowUploadModal(true);
+
+    // Best-effort: suggest a category and, for bills/receipts, an amount and
+    // date - pre-filled but always editable, never silently committed. If
+    // this fails for any reason, the form just falls back to manual entry,
+    // exactly as it worked before this feature existed.
+    setClassifying(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    client.post("/documents/classify", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
+      .then((res) => {
+        const { category, bill_amount, bill_date, method } = res.data;
+        if (category && category !== "general") setUploadCategory(category);
+        if (bill_amount) setBillAmount(String(bill_amount));
+        if (bill_date) setBillDate(bill_date);
+        if (method && method !== "none") setClassifiedMethod(method);
+      })
+      .catch(() => {})
+      .finally(() => setClassifying(false));
   };
 
   const confirmUpload = async () => {
@@ -239,9 +260,15 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
             <button className="close-button" aria-label="Close" onClick={() => { setShowUploadModal(false); setPendingFile(null); }} data-testid="close-upload-modal-button"><X size={18} /></button>
             <p className="eyebrow">UPLOAD</p>
             <h2>{pendingFile?.name}</h2>
+            {classifying && <p className="empty-hint" data-testid="classifying-indicator" style={{ marginBottom: 12 }}>Reading document…</p>}
+            {classifiedMethod && !classifying && (
+              <p className="empty-hint" data-testid="classification-suggestion-note" style={{ marginBottom: 12 }}>
+                {classifiedMethod === "gemini_vision" ? "AI" : "Automatic"} suggestion below — please check it's correct before uploading.
+              </p>
+            )}
             <div className="stack-form">
               <label>What kind of document is this?
-                <select value={uploadCategory} onChange={(e) => setUploadCategory(e.target.value)} data-testid="upload-category-select">
+                <select value={uploadCategory} onChange={(e) => { setUploadCategory(e.target.value); setClassifiedMethod(null); }} data-testid="upload-category-select">
                   {DOCUMENT_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                 </select>
               </label>
