@@ -289,7 +289,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                                 </span>
                               )}
                             </span>
-                            <button type="button" className="icon-button" aria-label="Preview" style={{ width: 24, height: 24 }} onClick={() => setPreviewDoc(d)} data-testid={`preview-packet-document-${d.id}`}><Eye size={13} /></button>
+                            <button type="button" className="icon-button" aria-label="Preview" title="Preview" style={{ width: 24, height: 24 }} onClick={() => setPreviewDoc(d)} data-testid={`preview-packet-document-${d.id}`}><Eye size={13} /></button>
                           </li>
                         ))}
                       </ul>
@@ -568,7 +568,7 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                             <>
                               <p className="sheet-sub">Typed here only to lay it out for you to copy - this stays in your browser for this session only. Coversfolio never saves or transmits your bank/PAN details.</p>
                               <div className="row-2">
-                                <label style={{ fontSize: 11 }}>TPA / Company membership ID<input value={bankForm.tpa_membership_id} onChange={(e) => setBankForm({ ...bankForm, tpa_membership_id: e.target.value })} data-testid="bank-tpa-id-input" /></label>
+                                <label style={{ fontSize: 11 }}>TPA (Third Party Administrator) / Company membership ID<input value={bankForm.tpa_membership_id} onChange={(e) => setBankForm({ ...bankForm, tpa_membership_id: e.target.value })} data-testid="bank-tpa-id-input" /></label>
                                 <label style={{ fontSize: 11 }}>PAN<input value={bankForm.pan_number} onChange={(e) => setBankForm({ ...bankForm, pan_number: e.target.value.toUpperCase() })} maxLength={10} data-testid="bank-pan-input" /></label>
                               </div>
                               <div className="row-2">

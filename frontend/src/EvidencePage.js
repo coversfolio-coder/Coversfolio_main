@@ -56,6 +56,7 @@ export default function EvidencePage({ canEdit, notify }) {
   };
 
   const remove = async (id) => {
+    if (!window.confirm("Remove this item from your inventory? This can't be undone.")) return;
     try { await client.delete(`/evidence/${id}`); notify("Item removed"); load(); }
     catch (err) { notify(apiError(err), true); }
   };
@@ -111,6 +112,7 @@ export default function EvidencePage({ canEdit, notify }) {
   };
 
   const removeDocument = async (docId) => {
+    if (!window.confirm("Remove this bill copy? This can't be undone.")) return;
     try { await client.delete(`/documents/${docId}`); notify("Removed"); load(); }
     catch (err) { notify(apiError(err), true); }
   };
@@ -145,7 +147,7 @@ export default function EvidencePage({ canEdit, notify }) {
               <header>
                 <strong>{item.item_name}</strong>
                 <small>{item.category}</small>
-                {canEdit && <button className="icon-button" aria-label="Remove item" data-testid={`remove-evidence-${item.id}`} onClick={() => remove(item.id)}><Trash2 size={15} /></button>}
+                {canEdit && <button className="icon-button" aria-label="Remove item" title="Remove item" data-testid={`remove-evidence-${item.id}`} onClick={() => remove(item.id)}><Trash2 size={15} /></button>}
               </header>
               {item.description && <p>{item.description}</p>}
               <p><em>Value:</em> ₹{Number(item.value || 0).toLocaleString("en-IN")} {item.purchase_date && <span>· <em>Purchased:</em> {item.purchase_date}</span>}</p>
@@ -158,9 +160,9 @@ export default function EvidencePage({ canEdit, notify }) {
                         <FileText size={13} />
                         <span className="evidence-bill-name">{doc.filename}</span>
                         <small>{fileSize(doc.size)}</small>
-                        <button className="icon-button" aria-label="Extract text" disabled={ocrBusyId === doc.id} data-testid={`ocr-evidence-bill-${doc.id}`} onClick={() => runOcr(doc.id)}><ScanText size={13} className={ocrBusyId === doc.id ? "spin-icon" : ""} /></button>
-                        <button className="icon-button" aria-label="Download" data-testid={`download-evidence-bill-${doc.id}`} onClick={() => download(doc)}><Download size={13} /></button>
-                        {canEdit && <button className="icon-button" aria-label="Remove bill copy" data-testid={`remove-evidence-bill-${doc.id}`} onClick={() => removeDocument(doc.id)}><Trash2 size={13} /></button>}
+                        <button className="icon-button" aria-label="Extract text" title="Extract text" disabled={ocrBusyId === doc.id} data-testid={`ocr-evidence-bill-${doc.id}`} onClick={() => runOcr(doc.id)}><ScanText size={13} className={ocrBusyId === doc.id ? "spin-icon" : ""} /></button>
+                        <button className="icon-button" aria-label="Download" title="Download" data-testid={`download-evidence-bill-${doc.id}`} onClick={() => download(doc)}><Download size={13} /></button>
+                        {canEdit && <button className="icon-button" aria-label="Remove bill copy" title="Remove bill copy" data-testid={`remove-evidence-bill-${doc.id}`} onClick={() => removeDocument(doc.id)}><Trash2 size={13} /></button>}
                       </div>
                       {ocrResults[doc.id] && (() => {
                         const detectedAmount = findRupeeAmount(ocrResults[doc.id].text);

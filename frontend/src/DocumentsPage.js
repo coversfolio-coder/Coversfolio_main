@@ -141,6 +141,7 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
   };
 
   const remove = async (id) => {
+    if (!window.confirm("Remove this document? This can't be undone.")) return;
     try { await client.delete(`/documents/${id}`); notify("Document removed"); load(); }
     catch (err) { notify(apiError(err), true); }
   };
@@ -239,10 +240,10 @@ export default function DocumentsPage({ canEdit, notify, onReviewAsPolicy }) {
                         {fileSize(doc.size)} · Uploaded {doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : ""} by {doc.uploaded_by_name}
                       </small>
                     </div>
-                    <button className="icon-button" aria-label="Preview" data-testid={`preview-document-${doc.id}`} onClick={() => setPreviewDoc(doc)}><Eye size={15} /></button>
-                    <button className="icon-button" aria-label="Extract text" disabled={ocrBusyId === doc.id} data-testid={`ocr-document-${doc.id}`} onClick={() => runOcr(doc.id)}><FileScan size={15} className={ocrBusyId === doc.id ? "spin-icon" : ""} /></button>
-                    <button className="icon-button" aria-label="Download" data-testid={`download-document-${doc.id}`} onClick={() => download(doc)}><Download size={15} /></button>
-                    {canEdit && <button className="icon-button" aria-label="Remove document" data-testid={`remove-document-${doc.id}`} onClick={() => remove(doc.id)}><Trash2 size={15} /></button>}
+                    <button className="icon-button" aria-label="Preview" title="Preview" data-testid={`preview-document-${doc.id}`} onClick={() => setPreviewDoc(doc)}><Eye size={15} /></button>
+                    <button className="icon-button" aria-label="Extract text" title="Extract text" disabled={ocrBusyId === doc.id} data-testid={`ocr-document-${doc.id}`} onClick={() => runOcr(doc.id)}><FileScan size={15} className={ocrBusyId === doc.id ? "spin-icon" : ""} /></button>
+                    <button className="icon-button" aria-label="Download" title="Download" data-testid={`download-document-${doc.id}`} onClick={() => download(doc)}><Download size={15} /></button>
+                    {canEdit && <button className="icon-button" aria-label="Remove document" title="Remove document" data-testid={`remove-document-${doc.id}`} onClick={() => remove(doc.id)}><Trash2 size={15} /></button>}
                   </header>
                   {ocrResults[doc.id] && (
                     <div className="empty-hint" data-testid={`ocr-result-${doc.id}`} style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 220, overflowY: "auto" }}>

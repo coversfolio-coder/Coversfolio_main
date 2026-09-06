@@ -2,6 +2,28 @@ import { useEffect, useRef, useState } from "react";
 import client, { apiError } from "@/api";
 import { ArrowUpRight, BookOpen, Check, FileScan, FileText, MapPin, Plus, ShieldQuestion, Sparkles, Trash2, Upload, Users, X } from "lucide-react";
 
+function InfoTip({ text }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span style={{ position: "relative", display: "inline-block" }}>
+      <button
+        type="button" onClick={() => setOpen((v) => !v)} aria-label="What does this mean?"
+        style={{ border: "1px solid var(--line)", borderRadius: "50%", width: 16, height: 16, fontSize: 10, lineHeight: 1, background: "var(--canvas)", color: "var(--muted)", cursor: "pointer", padding: 0, marginLeft: 5, verticalAlign: "middle" }}
+        data-testid="info-tip-button"
+      >?</button>
+      {open && (
+        <span
+          onClick={() => setOpen(false)}
+          style={{ position: "absolute", zIndex: 20, top: 22, left: 0, background: "#12141C", color: "#fff", padding: "9px 11px", borderRadius: 8, fontSize: 11.5, width: 230, lineHeight: 1.45, boxShadow: "0 6px 18px rgba(0,0,0,.2)", cursor: "pointer" }}
+          data-testid="info-tip-text"
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 const emptyForm = {
   insurer_name: "", policy_number: "", policy_type: "Health",
   sum_insured: "", start_date: "", end_date: "", first_covered_date: "",
@@ -286,6 +308,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
   };
 
   const remove = async (id) => {
+    if (!window.confirm("Remove this policy? This can't be undone - you'll lose its saved AI analysis and coverage history too.")) return;
     try { await client.delete(`/policies/${id}`); notify("Policy removed"); load(); }
     catch (err) { notify(apiError(err), true); }
   };
@@ -324,7 +347,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 </div>
                 {canEdit && (
                   <button
-                    className="icon-button" aria-label="Remove policy" data-testid={`remove-policy-${p.id}`}
+                    className="icon-button" aria-label="Remove policy" title="Remove policy" data-testid={`remove-policy-${p.id}`}
                     onClick={(e) => { e.stopPropagation(); remove(p.id); }}
                   >
                     <Trash2 size={15} />
@@ -370,7 +393,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
 
             {/* Basic details - always available, no AI required */}
             <div className="entry" style={{ marginBottom: 12 }} data-testid="policy-basic-details">
-              <p><em>Sum insured:</em> ₹{Number(detailsPolicy.sum_insured).toLocaleString("en-IN")}</p>
+              <p><em>Sum insured:</em><InfoTip text="The maximum amount your insurer will pay in total for claims during one policy year." /> ₹{Number(detailsPolicy.sum_insured).toLocaleString("en-IN")}</p>
               <p><em>Valid:</em> {detailsPolicy.start_date} to {detailsPolicy.end_date}</p>
               <p style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <em>Covered since:</em>
@@ -458,7 +481,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
               return (
                 <>
                   <div className="entry" style={{ marginBottom: 12 }} data-testid="pre-existing-waiting-section">
-                    <strong style={{ fontSize: 12 }}>Pre-existing disease waiting period</strong>
+                    <strong style={{ fontSize: 12 }}>Pre-existing disease waiting period<InfoTip text="A health condition you already had before buying this policy usually isn't covered until this many months have passed since your coverage first began - continuously, even across renewals." /></strong>
                     {hasPreExisting ? (
                       <p style={{ fontSize: 12, margin: "6px 0 0" }}>
                         {insights.pre_existing_disease_waiting_months} months.{" "}
@@ -609,7 +632,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 {detailsPolicy.benefits.restoration_benefit && (
                   <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-restoration">
                     <header>
-                      <div style={{ flex: 1 }}><strong>Restoration benefit</strong></div>
+                      <div style={{ flex: 1 }}><strong>Restoration benefit<InfoTip text="If your sum insured runs out from a claim, this automatically refills it (once, or fully) so you're not left uncovered for the rest of the policy year." /></strong></div>
                       {detailsPolicy.benefits.restoration_benefit.relevant_now && <span className="chip chip-amber">Your sum insured looks exhausted - relevant now</span>}
                     </header>
                     {detailsPolicy.benefits.restoration_benefit.notes && <p style={{ fontSize: 12, margin: "6px 0 0" }}>{detailsPolicy.benefits.restoration_benefit.notes}</p>}
@@ -618,7 +641,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
 
                 {detailsPolicy.benefits.no_claim_bonus && (
                   <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-ncb">
-                    <strong style={{ fontSize: 13 }}>No-claim bonus</strong>
+                    <strong style={{ fontSize: 13 }}>No-claim bonus<InfoTip text="A reward for not making any claims in a policy year - usually a boost to your sum insured, or a discount on renewal, at no extra cost to you." /></strong>
                     {detailsPolicy.benefits.no_claim_bonus.notes && <p style={{ fontSize: 12, margin: "6px 0 0" }}>{detailsPolicy.benefits.no_claim_bonus.notes}</p>}
                   </div>
                 )}
@@ -780,7 +803,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 )}
                 {aiInsights.key_sub_limits?.length > 0 && (
                   <div className="ai-insights-row">
-                    <strong>Other sub-limits:</strong>
+                    <strong>Other sub-limits:<InfoTip text="A cap on how much this policy pays for a specific expense, even if your overall sum insured has plenty left - e.g. a fixed maximum for cataract surgery regardless of the actual bill." /></strong>
                     <ul>{aiInsights.key_sub_limits.map((s, i) => <li key={i}>{s.name}: {s.cap_description}</li>)}</ul>
                   </div>
                 )}
@@ -817,7 +840,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                   <option value="Home">Home</option>
                   <option value="Other">Other</option>
                 </select></label>
-                <label>Sum insured (₹)<input required type="number" min="1" value={form.sum_insured} onChange={(e) => setForm({ ...form, sum_insured: e.target.value })} placeholder="500000" data-testid="policy-sum-insured-input" /></label>
+                <label>Sum insured (₹)<InfoTip text="The maximum amount your insurer will pay in total for claims during one policy year." /><input required type="number" min="1" value={form.sum_insured} onChange={(e) => setForm({ ...form, sum_insured: e.target.value })} placeholder="500000" data-testid="policy-sum-insured-input" /></label>
               </div>
               <div className="row-2">
                 <label>Start date<input required type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} data-testid="policy-start-date-input" /></label>
@@ -836,7 +859,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                   <div className="row-2" key={i} style={{ marginBottom: 8 }}>
                     <input value={p.name} onChange={(e) => updatePerson(i, "name", e.target.value)} placeholder="Name" data-testid={`insured-name-${i}`} />
                     <input value={p.relation} onChange={(e) => updatePerson(i, "relation", e.target.value)} placeholder="Relation" data-testid={`insured-relation-${i}`} />
-                    <button type="button" className="icon-button" aria-label="Remove person" onClick={() => removePerson(i)} data-testid={`remove-insured-${i}`}><X size={14} /></button>
+                    <button type="button" className="icon-button" aria-label="Remove person" title="Remove person" onClick={() => removePerson(i)} data-testid={`remove-insured-${i}`}><X size={14} /></button>
                   </div>
                 ))}
                 <button type="button" className="quiet-button" onClick={addPerson} data-testid="add-insured-person-button"><Plus size={13} /> Add person</button>
