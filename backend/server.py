@@ -790,12 +790,37 @@ class MaternityCoverInfo(BaseModel):
     covered: bool = False
     cap_amount: float | None = None
     waiting_period_months: int | None = None
+    # Distinct from waiting_period_months (which is about when maternity cover
+    # starts after buying the policy) - this is the expense window around one
+    # specific hospitalization, e.g. "expenses from 30 days before admission
+    # and 60 days after discharge are covered." Only filled when the policy
+    # document actually states a number - never a generic assumed default.
+    pre_natal_days: int | None = None
+    post_natal_days: int | None = None
+    # A policy-specific contractual condition (e.g. "notify within 48 hours of
+    # a planned delivery"), NOT a universal IRDAI rule - only filled when this
+    # exact document states it, and the frontend must attribute it to this
+    # policy specifically rather than presenting it as a general regulation.
+    notification_requirement: str | None = None
     notes: str | None = None
 
 
 class PolicySubLimit(BaseModel):
     name: str
     cap_description: str
+
+
+class RoomRentLimit(BaseModel):
+    # Structured (not just free text) because the proportionate-deduction
+    # calculator needs to actually compute with this, not just display it.
+    limit_type: str = Field(description="Exactly one of: fixed_amount, percentage_of_sum_insured, no_limit")
+    value: float | None = Field(default=None, description="The rupee amount (if fixed_amount) or the percentage number e.g. 1 for 1% (if percentage_of_sum_insured) - null if no_limit")
+    notes: str | None = None
+
+
+class CoPayment(BaseModel):
+    percentage: float | None = None
+    condition: str | None = Field(default=None, description="What triggers this co-pay, e.g. 'insured members above 60 years' or 'voluntary co-pay chosen at purchase' - only if the document states one")
 
 
 class WaitingPeriodItem(BaseModel):
@@ -828,7 +853,7 @@ class PolicyAIAnalysis(BaseModel):
     # earlier in this build (maternity_cover accessed as if it always existed).
     # CURRENT_AI_SCHEMA_VERSION is the source of truth for "latest"; this
     # field records what a given policy was actually analyzed under.
-    schema_version: int = 3
+    schema_version: int = 5
     insurer_name: str | None = None
     policy_number: str | None = None
     policy_type: str | None = None
@@ -837,6 +862,8 @@ class PolicyAIAnalysis(BaseModel):
     end_date: str | None = None
     maternity_cover: MaternityCoverInfo | None = None
     key_sub_limits: list[PolicySubLimit] = Field(default_factory=list)
+    room_rent_limit: RoomRentLimit | None = None
+    co_payment: CoPayment | None = None
     key_exclusions: list[str] = Field(default_factory=list)
     initial_waiting_period_days: int | None = None
     pre_existing_disease_waiting_months: float | None = None
@@ -858,7 +885,7 @@ class PolicyAIAnalysis(BaseModel):
 # under an older version is missing fields outright (not null) - callers that
 # read ai_insights should treat every field access as "may not exist" rather
 # than assuming the current shape, regardless of what this constant says.
-CURRENT_AI_SCHEMA_VERSION = 3
+CURRENT_AI_SCHEMA_VERSION = 5
 
 
 class AIAnalysisUnavailable(Exception):
@@ -877,12 +904,32 @@ Extract ONLY what is explicitly stated in this document. Never invent, estimate,
 date, or term that is not written in the text. If something isn't present, leave that field null or
 an empty list rather than guessing - a wrong answer is far worse than an honest blank.
 
+If this document includes a "Customer Information Sheet" (CIS) - a short, standardized IRDAI-mandated
+summary page(s), separate from the full policy wording - treat it as the most reliable source for sum
+insured, waiting periods, limits/sub-limits, and exclusions, since it's written in plain language
+specifically for this purpose. Cross-check against the full wording where both are present.
+
 Pay particular attention to:
 - The overall sum insured (the base coverage amount, not any single sub-limit or bonus)
 - Maternity coverage specifically: is it covered at all, what is the sub-limit/cap amount if any,
-  and what waiting period (in months) applies before it can be claimed
-- Any other named sub-limits or caps (room rent limits, specific procedure caps, co-payment
-  percentages, etc.)
+  and what waiting period (in months) applies before it can be claimed. Also look for two more
+  specific, separate facts this document may state: (a) the pre-natal and post-natal expense
+  window around one hospitalization - e.g. "expenses from 30 days before admission and 60 days
+  after discharge are covered" (this is different from the waiting period - it's about the expense
+  window around a single delivery, not when maternity cover starts) - and (b) any specific claim
+  notification requirement this policy states (e.g. "intimate the insurer within 48 hours of a
+  planned delivery"). Only fill in pre_natal_days, post_natal_days, or notification_requirement if
+  this exact document states a number or condition - leave them null if it doesn't, even if this
+  seems like a common industry practice. These are this policy's own stated terms, not a general rule.
+- The room rent limit specifically, as its own structured fact: is it a fixed rupee amount per day
+  (e.g. "Rs. 5,000 per day"), a percentage of the sum insured per day (e.g. "1% of sum insured"), or
+  explicitly no limit/room rent restriction at all? Set limit_type accordingly and value to the actual
+  number stated (the rupee amount, or the percentage as a plain number like 1 for "1%") - leave value
+  null if limit_type is no_limit, and leave the whole field null if the document doesn't address this.
+- Any co-payment clause: the percentage the policyholder bears on each claim, and what condition
+  triggers it if any (e.g. age-based for senior citizens, zone-based, or a voluntary co-pay the
+  policyholder chose at purchase for a lower premium) - only if explicitly stated.
+- Any other named sub-limits or caps (specific procedure caps like cataract or knee replacement, etc.)
 - Key exclusions explicitly listed in the document - things not covered under any circumstance
 - The initial/general waiting period in days (commonly called a "cooling period" - the minimum time
   from policy start before ANY illness claim, other than an accident, can be made)
@@ -1870,6 +1917,15 @@ async def _public_policy_enriched(policy: dict, household_id: str) -> dict:
     base["status_info"] = compute_policy_status(policy.get("end_date", ""))
     base["utilization"] = await compute_policy_utilization(household_id, policy["id"], policy.get("sum_insured", 0))
 
+    # After 60 continuous months of coverage (IRDAI's moratorium period), an
+    # insurer generally can no longer contest a claim for non-disclosure or
+    # misrepresentation except on grounds of proven fraud - reusing the same
+    # waiting-period math since it's the same "has N months passed since
+    # continuous coverage began" question, just with a fixed 60-month period.
+    # Doesn't depend on AI insights at all, just the policy's own dates.
+    first_covered = policy.get("first_covered_date") or policy.get("start_date")
+    base["moratorium_status"] = compute_waiting_status(first_covered, 60)
+
     ai_insights = policy.get("ai_insights")
     if ai_insights:
         # Waiting periods (pre-existing disease, named conditions) run from
@@ -1942,6 +1998,15 @@ def compute_policy_benefits(policy: dict, ai_insights: dict, status_info: dict, 
 
     if ai_insights.get("covered_expense_categories"):
         result["covered_expense_categories"] = ai_insights["covered_expense_categories"]
+
+    if ai_insights.get("maternity_cover"):
+        result["maternity_cover"] = ai_insights["maternity_cover"]
+
+    if ai_insights.get("room_rent_limit"):
+        result["room_rent_limit"] = ai_insights["room_rent_limit"]
+
+    if ai_insights.get("co_payment"):
+        result["co_payment"] = ai_insights["co_payment"]
 
     covered_now, still_waiting = [], []
     for item in ai_insights.get("waiting_periods") or []:
@@ -3433,6 +3498,46 @@ async def get_escalation_letter(claim_id: str, stage: str = "gro", user: dict = 
     deductions = [s for s in claim.get("settlements", []) if s.get("kind") == "deduction"]
     letter = generate_escalation_letter_text(claim, policy, household.get("name", "") if household else "", deductions, stage)
     return {"letter": letter, "deduction_count": len(deductions), "stage": stage}
+
+
+# Per IRDAI's Master Circular on Health Insurance (29 May 2024, the same one
+# already cited elsewhere in this app for cashless/reimbursement timelines),
+# proportionate deduction can never be applied to these categories - insurers
+# must pay them in full regardless of room choice. A policy clause saying
+# otherwise is unenforceable against a binding IRDAI circular.
+PROPORTIONATE_DEDUCTION_EXCLUDED_CATEGORIES = ["ICU charges", "Medicines", "Implants", "Consumables", "Diagnostics", "Medical devices"]
+
+
+class ProportionateDeductionInput(BaseModel):
+    eligible_room_rent: float = Field(gt=0, description="Your policy's eligible room rent per day")
+    actual_room_rent: float = Field(gt=0, description="What the room you actually stayed in cost per day")
+    associated_expenses: float = Field(ge=0, description="Doctor/surgeon fees + operation theatre + nursing charges combined - the categories proportionate deduction can legitimately apply to")
+    excluded_category_deductions: dict[str, float] = Field(default_factory=dict, description="Any amounts the insurer deducted from ICU/medicines/implants/consumables/diagnostics, if any - these should never be reduced by this clause")
+
+
+@api_router.post("/tools/proportionate-deduction-check")
+async def check_proportionate_deduction(input: ProportionateDeductionInput, user: dict = Depends(current_user)):
+    ratio = min(1.0, input.eligible_room_rent / input.actual_room_rent) if input.actual_room_rent > 0 else 1.0
+    correct_payable = round(input.associated_expenses * ratio, 2)
+    correct_deduction = round(input.associated_expenses - correct_payable, 2)
+    room_rent_excess = round(max(0.0, input.actual_room_rent - input.eligible_room_rent), 2)
+
+    wrongly_deducted = {
+        category: amount for category, amount in input.excluded_category_deductions.items()
+        if amount and category in PROPORTIONATE_DEDUCTION_EXCLUDED_CATEGORIES
+    }
+    wrongly_deducted_total = round(sum(wrongly_deducted.values()), 2)
+
+    return {
+        "ratio": round(ratio, 4),
+        "correct_payable_on_associated_expenses": correct_payable,
+        "correct_deduction_on_associated_expenses": correct_deduction,
+        "room_rent_excess_per_day": room_rent_excess,
+        "wrongly_deducted_categories": wrongly_deducted,
+        "wrongly_deducted_total": wrongly_deducted_total,
+        "excluded_categories_reference": PROPORTIONATE_DEDUCTION_EXCLUDED_CATEGORIES,
+        "citation": "IRDAI Master Circular on Health Insurance Business, 29 May 2024: proportionate deduction may only apply to room rent, doctor/surgeon fees, OT charges, and nursing - never to ICU charges, medicines, implants, consumables, diagnostics, or medical devices, regardless of policy wording. It also cannot apply at all if the hospital doesn't charge different rates for different room categories.",
+    }
 
 
 @api_router.post("/claims/{claim_id}/stage")

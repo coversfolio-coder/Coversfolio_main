@@ -144,3 +144,45 @@ def test_first_covered_date_can_be_explicitly_edited(registered_user):
     r = client.get(f"/api/policies/{policy['id']}")
     assert r.json()["first_covered_date"] == "2020-06-01"
     print("first_covered_date can be explicitly corrected by the user")
+from conftest import make_policy
+
+def test_maternity_prenatal_postnatal_fields_flow_through(registered_user):
+    client, user = registered_user
+    policy = make_policy(client, start_date="2023-01-01", end_date="2027-01-01")
+    ai_insights = {
+        "schema_version": 4,
+        "maternity_cover": {
+            "covered": True,
+            "cap_amount": 100000,
+            "waiting_period_months": 24,
+            "pre_natal_days": 30,
+            "post_natal_days": 60,
+            "notification_requirement": "Intimate insurer within 48 hours of a planned delivery",
+            "notes": None,
+        },
+    }
+    client.put(f"/api/policies/{policy['id']}", json={"ai_insights": ai_insights})
+
+    r = client.get(f"/api/policies/{policy['id']}")
+    benefits = r.json()["benefits"]
+    mat = benefits["maternity_cover"]
+    assert mat["pre_natal_days"] == 30
+    assert mat["post_natal_days"] == 60
+    assert mat["notification_requirement"] == "Intimate insurer within 48 hours of a planned delivery"
+    # Confirm waiting_status was actually computed (started 2023, 24-month wait = long since passed)
+    assert mat["waiting_status"]["covered_now"] is True
+    print("Maternity pre/post-natal fields and computed waiting_status all flow through correctly:", mat)
+
+def test_maternity_fields_default_to_null_when_not_stated(registered_user):
+    client, user = registered_user
+    policy = make_policy(client)
+    ai_insights = {
+        "schema_version": 4,
+        "maternity_cover": {"covered": True, "cap_amount": 50000, "waiting_period_months": 24},
+    }
+    client.put(f"/api/policies/{policy['id']}", json={"ai_insights": ai_insights})
+    r = client.get(f"/api/policies/{policy['id']}")
+    mat = r.json()["benefits"]["maternity_cover"]
+    assert mat.get("pre_natal_days") is None
+    assert mat.get("notification_requirement") is None
+    print("Correctly left null when not explicitly stated - no invented defaults")

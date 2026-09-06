@@ -28,6 +28,29 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   const [escalationLetter, setEscalationLetter] = useState(null);
   const [escalationStage, setEscalationStage] = useState("gro");
   const [generatingLetter, setGeneratingLetter] = useState(false);
+  const [propCalc, setPropCalc] = useState({ eligible_room_rent: "", actual_room_rent: "", associated_expenses: "", excluded_icu: "", excluded_medicines: "", excluded_implants: "", excluded_consumables: "", excluded_diagnostics: "" });
+  const [propResult, setPropResult] = useState(null);
+  const [calculating, setCalculating] = useState(false);
+
+  const runProportionateCalc = async () => {
+    if (!propCalc.eligible_room_rent || !propCalc.actual_room_rent || !propCalc.associated_expenses) return;
+    setCalculating(true);
+    try {
+      const excluded = {};
+      if (propCalc.excluded_icu) excluded["ICU charges"] = Number(propCalc.excluded_icu);
+      if (propCalc.excluded_medicines) excluded["Medicines"] = Number(propCalc.excluded_medicines);
+      if (propCalc.excluded_implants) excluded["Implants"] = Number(propCalc.excluded_implants);
+      if (propCalc.excluded_consumables) excluded["Consumables"] = Number(propCalc.excluded_consumables);
+      if (propCalc.excluded_diagnostics) excluded["Diagnostics"] = Number(propCalc.excluded_diagnostics);
+      const res = await client.post("/tools/proportionate-deduction-check", {
+        eligible_room_rent: Number(propCalc.eligible_room_rent),
+        actual_room_rent: Number(propCalc.actual_room_rent),
+        associated_expenses: Number(propCalc.associated_expenses),
+        excluded_category_deductions: excluded,
+      });
+      setPropResult(res.data);
+    } catch (err) { notify(apiError(err), true); } finally { setCalculating(false); }
+  };
 
   const generateEscalationLetter = async (stage) => {
     setGeneratingLetter(true);
@@ -786,6 +809,53 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                   <button className="primary-button" data-testid="add-settlement-submit"><Plus size={14} /> Record entry</button>
                 </form>
               )}
+
+              <div style={{ borderTop: "1px solid var(--line)", marginTop: 24, paddingTop: 20 }}>
+                <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>Room rent deduction calculator</h3>
+                <p className="readonly-hint" style={{ marginBottom: 14 }}>
+                  If you chose a room above your policy's limit, insurers reduce more than just the room charge - doctor fees, surgery, and nursing get cut too. This works out the correct math, and flags anything wrongly deducted from categories IRDAI says can never be touched this way.
+                </p>
+                <div className="row-2">
+                  <label>Your policy's eligible room rent/day (₹)<input type="number" min="1" value={propCalc.eligible_room_rent} onChange={e => setPropCalc({ ...propCalc, eligible_room_rent: e.target.value })} placeholder="5000" data-testid="calc-eligible-rent-input" /></label>
+                  <label>What the room actually cost/day (₹)<input type="number" min="1" value={propCalc.actual_room_rent} onChange={e => setPropCalc({ ...propCalc, actual_room_rent: e.target.value })} placeholder="10000" data-testid="calc-actual-rent-input" /></label>
+                </div>
+                <label>Doctor/surgeon fees + OT + nursing charges billed (₹)<input type="number" min="0" value={propCalc.associated_expenses} onChange={e => setPropCalc({ ...propCalc, associated_expenses: e.target.value })} placeholder="160000" data-testid="calc-associated-expenses-input" /></label>
+                <p className="readonly-hint" style={{ margin: "8px 0 4px" }}>Did the insurer deduct anything from these? (leave blank if not applicable - any amount here should have been paid in full)</p>
+                <div className="row-2">
+                  <label>ICU charges deducted (₹)<input type="number" min="0" value={propCalc.excluded_icu} onChange={e => setPropCalc({ ...propCalc, excluded_icu: e.target.value })} data-testid="calc-excluded-icu-input" /></label>
+                  <label>Medicines deducted (₹)<input type="number" min="0" value={propCalc.excluded_medicines} onChange={e => setPropCalc({ ...propCalc, excluded_medicines: e.target.value })} data-testid="calc-excluded-medicines-input" /></label>
+                </div>
+                <div className="row-2">
+                  <label>Implants deducted (₹)<input type="number" min="0" value={propCalc.excluded_implants} onChange={e => setPropCalc({ ...propCalc, excluded_implants: e.target.value })} data-testid="calc-excluded-implants-input" /></label>
+                  <label>Diagnostics deducted (₹)<input type="number" min="0" value={propCalc.excluded_diagnostics} onChange={e => setPropCalc({ ...propCalc, excluded_diagnostics: e.target.value })} data-testid="calc-excluded-diagnostics-input" /></label>
+                </div>
+                <button type="button" className="primary-button" disabled={calculating} onClick={runProportionateCalc} data-testid="run-calc-button">
+                  {calculating ? "Calculating…" : "Calculate"}
+                </button>
+
+                {propResult && (
+                  <div style={{ marginTop: 16 }} data-testid="calc-result">
+                    <div className="entry">
+                      <p style={{ fontSize: 13, margin: 0 }}>Ratio applied: <strong>{(propResult.ratio * 100).toFixed(1)}%</strong></p>
+                      <p style={{ fontSize: 13, margin: "6px 0 0" }}>Correct payable on doctor/OT/nursing: <strong>₹{propResult.correct_payable_on_associated_expenses.toLocaleString("en-IN")}</strong></p>
+                      <p style={{ fontSize: 12, color: "var(--muted)", margin: "4px 0 0" }}>(Legitimate deduction on these: ₹{propResult.correct_deduction_on_associated_expenses.toLocaleString("en-IN")} - this part is allowed)</p>
+                    </div>
+                    {propResult.wrongly_deducted_total > 0 ? (
+                      <div className="entry" style={{ marginTop: 10, borderColor: "var(--red)" }} data-testid="calc-wrongful-deduction">
+                        <p style={{ fontSize: 13, margin: 0, color: "var(--red)", fontWeight: 600 }}>
+                          ₹{propResult.wrongly_deducted_total.toLocaleString("en-IN")} appears wrongly deducted
+                        </p>
+                        <p style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 0" }}>
+                          From: {Object.keys(propResult.wrongly_deducted_categories).join(", ")} - IRDAI's Master Circular (29 May 2024) says these can never be reduced by this clause, regardless of room choice. Worth including in your escalation letter below.
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="readonly-hint" style={{ marginTop: 10 }}>No wrongly-deducted categories flagged, based on what you entered.</p>
+                    )}
+                    <p style={{ fontSize: 9.5, color: "var(--faint)", marginTop: 10 }}>{propResult.citation}</p>
+                  </div>
+                )}
+              </div>
 
               <div style={{ borderTop: "1px solid var(--line)", marginTop: 24, paddingTop: 20 }}>
                 <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>Dispute a deduction?</h3>

@@ -415,6 +415,16 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 )}
               </p>
               <p style={{ fontSize: 10, color: "var(--faint)", margin: "2px 0 0" }}>If this policy has been renewed continuously, this should be your original start date - not the current renewal period. It's what your waiting-period countdowns actually run from.</p>
+              {detailsPolicy.moratorium_status?.covered_now === true && (
+                <p style={{ fontSize: 11, color: "var(--teal)", margin: "6px 0 0" }} data-testid="moratorium-passed">
+                  Past the 60-month moratorium - your insurer generally can no longer contest a claim for non-disclosure, except proven fraud.
+                </p>
+              )}
+              {detailsPolicy.moratorium_status?.covered_now === false && (
+                <p style={{ fontSize: 11, color: "var(--muted)", margin: "6px 0 0" }} data-testid="moratorium-pending">
+                  {detailsPolicy.moratorium_status.days_remaining} days until the 60-month moratorium, after which claims generally can't be contested for non-disclosure except proven fraud.
+                </p>
+              )}
               {detailsPolicy.insured_people?.length > 0 && (
                 <p>
                   <em><Users size={12} style={{ verticalAlign: -2 }} /> Covered people:</em>{" "}
@@ -629,6 +639,54 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                   </div>
                 )}
 
+                {detailsPolicy.benefits.room_rent_limit && (
+                  <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-room-rent-limit">
+                    <strong style={{ fontSize: 13 }}>Room rent limit<InfoTip text="If you choose a room above this limit, insurers typically also reduce doctor fees, surgery charges, and nursing costs proportionately - not just the room charge. Use the calculator on a claim's Settlements tab to check the exact math." /></strong>
+                    <p style={{ fontSize: 12, margin: "6px 0 0" }}>
+                      {detailsPolicy.benefits.room_rent_limit.limit_type === "no_limit"
+                        ? "No room rent restriction, per this policy."
+                        : detailsPolicy.benefits.room_rent_limit.limit_type === "percentage_of_sum_insured"
+                          ? `${detailsPolicy.benefits.room_rent_limit.value}% of sum insured per day.`
+                          : `₹${Number(detailsPolicy.benefits.room_rent_limit.value).toLocaleString("en-IN")} per day.`}
+                    </p>
+                    {detailsPolicy.benefits.room_rent_limit.notes && <p style={{ fontSize: 11, color: "var(--muted)", margin: "4px 0 0" }}>{detailsPolicy.benefits.room_rent_limit.notes}</p>}
+                  </div>
+                )}
+
+                {detailsPolicy.benefits.co_payment && (
+                  <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-co-payment">
+                    <strong style={{ fontSize: 13 }}>Co-payment<InfoTip text="The percentage of each claim you pay yourself, regardless of sum insured - this is separate from any sub-limit or room rent deduction." /></strong>
+                    <p style={{ fontSize: 12, margin: "6px 0 0" }}>
+                      {detailsPolicy.benefits.co_payment.percentage}% of each claim{detailsPolicy.benefits.co_payment.condition ? ` - ${detailsPolicy.benefits.co_payment.condition}` : ""}.
+                    </p>
+                  </div>
+                )}
+
+                {detailsPolicy.benefits.maternity_cover?.covered && (
+                  <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-maternity">
+                    <strong style={{ fontSize: 13 }}>Maternity cover</strong>
+                    <p style={{ fontSize: 12, margin: "6px 0 0" }}>
+                      Covered{detailsPolicy.benefits.maternity_cover.cap_amount ? `, capped at ₹${Number(detailsPolicy.benefits.maternity_cover.cap_amount).toLocaleString("en-IN")}` : ""}.
+                      {detailsPolicy.benefits.maternity_cover.waiting_status && (
+                        detailsPolicy.benefits.maternity_cover.waiting_status.covered_now
+                          ? " Waiting period has passed."
+                          : ` ${detailsPolicy.benefits.maternity_cover.waiting_status.days_remaining} days left on the waiting period.`
+                      )}
+                    </p>
+                    {(detailsPolicy.benefits.maternity_cover.pre_natal_days || detailsPolicy.benefits.maternity_cover.post_natal_days) && (
+                      <p style={{ fontSize: 12, margin: "4px 0 0" }}>
+                        Expense window, per this policy: {detailsPolicy.benefits.maternity_cover.pre_natal_days ? `${detailsPolicy.benefits.maternity_cover.pre_natal_days} days before admission` : ""}
+                        {detailsPolicy.benefits.maternity_cover.pre_natal_days && detailsPolicy.benefits.maternity_cover.post_natal_days ? " and " : ""}
+                        {detailsPolicy.benefits.maternity_cover.post_natal_days ? `${detailsPolicy.benefits.maternity_cover.post_natal_days} days after discharge` : ""}.
+                      </p>
+                    )}
+                    {detailsPolicy.benefits.maternity_cover.notification_requirement && (
+                      <p style={{ fontSize: 11, color: "var(--muted)", margin: "4px 0 0" }}>This policy's own condition: {detailsPolicy.benefits.maternity_cover.notification_requirement}</p>
+                    )}
+                    {detailsPolicy.benefits.maternity_cover.notes && <p style={{ fontSize: 11, color: "var(--muted)", margin: "4px 0 0" }}>{detailsPolicy.benefits.maternity_cover.notes}</p>}
+                  </div>
+                )}
+
                 {detailsPolicy.benefits.restoration_benefit && (
                   <div className="entry" style={{ marginBottom: 12 }} data-testid="benefit-restoration">
                     <header>
@@ -751,6 +809,9 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 <small>{scannedFrom ? `Last scanned: ${scannedFrom}` : "PDF, Word, or text - we'll fill in what we can find"}</small>
               </span>
             </button>
+            <p className="readonly-hint" style={{ marginTop: -6, marginBottom: 14 }}>
+              Have your <strong>Customer Information Sheet</strong> (a short summary your insurer must provide alongside the full policy)? It's often more reliable for limits, sub-limits, and waiting periods than the full wording - upload it here too if you have it separately.
+            </p>
             <button
               type="button" className="text-button" style={{ marginTop: -6, marginBottom: 14 }}
               data-testid="scan-from-vault-button"
@@ -796,6 +857,16 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                       <span>
                         Covered{aiInsights.maternity_cover.cap_amount ? `, capped at ₹${Number(aiInsights.maternity_cover.cap_amount).toLocaleString("en-IN")}` : ""}
                         {aiInsights.maternity_cover.waiting_period_months ? ` after a ${aiInsights.maternity_cover.waiting_period_months}-month waiting period` : ""}.
+                        {(aiInsights.maternity_cover.pre_natal_days || aiInsights.maternity_cover.post_natal_days) && (
+                          <small style={{ display: "block" }}>
+                            Expense window: {aiInsights.maternity_cover.pre_natal_days ? `${aiInsights.maternity_cover.pre_natal_days} days before admission` : ""}
+                            {aiInsights.maternity_cover.pre_natal_days && aiInsights.maternity_cover.post_natal_days ? " and " : ""}
+                            {aiInsights.maternity_cover.post_natal_days ? `${aiInsights.maternity_cover.post_natal_days} days after discharge` : ""}, per this policy.
+                          </small>
+                        )}
+                        {aiInsights.maternity_cover.notification_requirement && (
+                          <small style={{ display: "block" }}>This policy's own condition: {aiInsights.maternity_cover.notification_requirement}</small>
+                        )}
                         {aiInsights.maternity_cover.notes && <small style={{ display: "block" }}>{aiInsights.maternity_cover.notes}</small>}
                       </span>
                     ) : <span>Not covered under this policy, per the document.</span>}

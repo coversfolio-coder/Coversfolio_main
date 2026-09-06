@@ -223,3 +223,46 @@ def test_escalation_path_present_in_claim_form(registered_user):
     assert "50 lakh" in path[2]["citation"]
     assert "1 year" in path[2]["timeframe"]
     print("Escalation path present for Cashless claim too (not type-restricted):", [p["label"] for p in path])
+def test_proportionate_deduction_matches_researched_worked_example(registered_user):
+    """Verified against the exact worked example found during research:
+    eligible Rs 5,000/day, actual Rs 10,000/day room, Rs 1,60,000 associated
+    expenses -> 50% ratio -> Rs 80,000 correctly payable."""
+    client, user = registered_user
+    r = client.post("/api/tools/proportionate-deduction-check", json={
+        "eligible_room_rent": 5000, "actual_room_rent": 10000, "associated_expenses": 160000,
+        "excluded_category_deductions": {},
+    })
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["ratio"] == 0.5
+    assert data["correct_payable_on_associated_expenses"] == 80000.0
+    assert data["correct_deduction_on_associated_expenses"] == 80000.0
+    print("Matches researched worked example exactly:", data["ratio"], data["correct_payable_on_associated_expenses"])
+
+def test_flags_wrongly_deducted_excluded_categories(registered_user):
+    client, user = registered_user
+    r = client.post("/api/tools/proportionate-deduction-check", json={
+        "eligible_room_rent": 5000, "actual_room_rent": 10000, "associated_expenses": 100000,
+        "excluded_category_deductions": {"ICU charges": 8000, "Medicines": 3000, "Room rent": 2000},
+    })
+    assert r.status_code == 200
+    data = r.json()
+    # "Room rent" isn't in the excluded list, so it should NOT be flagged - only ICU/Medicines
+    assert "ICU charges" in data["wrongly_deducted_categories"]
+    assert "Medicines" in data["wrongly_deducted_categories"]
+    assert "Room rent" not in data["wrongly_deducted_categories"]
+    assert data["wrongly_deducted_total"] == 11000.0
+    print("Correctly flagged only the truly-excluded categories:", data["wrongly_deducted_categories"])
+
+def test_no_excess_when_room_within_limit(registered_user):
+    client, user = registered_user
+    r = client.post("/api/tools/proportionate-deduction-check", json={
+        "eligible_room_rent": 5000, "actual_room_rent": 4000, "associated_expenses": 50000,
+        "excluded_category_deductions": {},
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ratio"] == 1.0
+    assert data["correct_deduction_on_associated_expenses"] == 0.0
+    assert data["room_rent_excess_per_day"] == 0.0
+    print("No deduction when within room rent limit, correctly capped at ratio 1.0")
