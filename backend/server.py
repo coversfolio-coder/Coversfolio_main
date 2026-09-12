@@ -3960,10 +3960,30 @@ def ask_agent_with_gemini(message: str, history: list[dict], household_context: 
         contents.append(genai_types.Content(role="user" if turn["role"] == "user" else "model", parts=[genai_types.Part.from_text(text=turn["content"])]))
     contents.append(genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=message)]))
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL, contents=contents,
-            config=genai_types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.3, max_output_tokens=500),
-        )
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL, contents=contents,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048,
+                    # Flash-family models spend part of the *same* output-token
+                    # budget on internal reasoning before the visible answer -
+                    # with a low budget, that reasoning could eat the whole
+                    # response, cutting it off right as it starts (exactly what
+                    # happened here). A simple Q&A assistant doesn't need deep
+                    # reasoning, so this keeps thinking minimal and leaves the
+                    # token budget for the actual answer instead.
+                    thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+        except genai_errors.ClientError:
+            # Some models reject thinking_budget=0 outright (a few require a
+            # minimum non-zero budget) - the raised max_output_tokens alone
+            # still substantially fixes the cutoff, so retry without the
+            # thinking override rather than failing the whole request.
+            response = client.models.generate_content(
+                model=GEMINI_MODEL, contents=contents,
+                config=genai_types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048),
+            )
         return response.text
     except Exception as exc:
         raise AIAnalysisFailed(str(exc)) from exc
