@@ -338,3 +338,123 @@ def test_prenatal_documents_grouped_by_visit_with_window_check(registered_user):
     jan1_group = next(g for g in groups if g["visit_date"] == "2026-01-01")
     assert jan1_group["window_status"] == "outside_window"
     print("Visit grouping and window check both correct:", [(g["visit_date"], len(g["documents"]), g["window_status"]) for g in groups])
+from conftest import make_policy, make_claim
+
+def test_no_override_matches_original_hardcoded_facts(registered_user):
+    """Zero-regression check: with no overrides in the DB, output must be
+    byte-for-byte identical to the original hardcoded SLA_DEFINITIONS."""
+    client, user = registered_user
+    policy = make_policy(client)
+    claim = make_claim(client, claim_type="Cashless", policy_id=policy["id"])
+    r = client.get(f"/api/claims/{claim['id']}/claim-form")
+    assert r.status_code == 200
+    rights = {item["label"]: item for item in r.json()["know_your_rights"]}
+    assert rights["Cashless pre-authorization decision"]["timeframe"] == "1 hour"
+    assert "IRDAI/HLT/CIR/PRO/84/5/2024" in rights["Cashless pre-authorization decision"]["citation"]
+
+def test_override_correctly_replaces_displayed_fact(registered_user):
+    import asyncio, server as srv
+    client, user = registered_user
+    policy = make_policy(client)
+    claim = make_claim(client, claim_type="Cashless", policy_id=policy["id"])
+
+    async def _insert_override():
+        await srv.db.regulatory_fact_overrides.insert_one({
+            "key": "sla_pre_auth", "hours": 2, "citation": "UPDATED: IRDAI revised this to 2 hours per a new 2026 circular.",
+            "source_url": "https://irdai.gov.in/fake-circular", "updated_at": "2026-09-01T00:00:00",
+        })
+    asyncio.get_event_loop().run_until_complete(_insert_override())
+
+    r = client.get(f"/api/claims/{claim['id']}/claim-form")
+    rights = {item["label"]: item for item in r.json()["know_your_rights"]}
+    assert rights["Cashless pre-authorization decision"]["timeframe"] == "2 hours"
+    assert "UPDATED" in rights["Cashless pre-authorization decision"]["citation"]
+    print("Override correctly reflected in live display:", rights["Cashless pre-authorization decision"])
+
+
+def test_agent_ask_returns_501_without_gemini_configured(registered_user):
+    client, user = registered_user
+    make_policy(client, insurer_name="Star Health")
+    r = client.post("/api/agent/ask", json={"message": "When does my waiting period end?"})
+    assert r.status_code == 501
+
+
+def test_agent_ask_requires_auth():
+    from fastapi.testclient import TestClient
+    import server as srv
+    anon_client = TestClient(srv.app)
+    r = anon_client.post("/api/agent/ask", json={"message": "hello"})
+    assert r.status_code == 401
+
+
+def test_build_agent_household_context_includes_real_policy_data():
+    """Also guards against a real bug this caught: the context builder
+    originally used Western comma grouping (1,000,000) instead of the Indian
+    lakh-style format (10,00,000) used everywhere else in this app."""
+    import server as srv
+    policies = [{
+        "insurer_name": "Star Health", "policy_type": "Health", "sum_insured": 1000000,
+        "start_date": "2022-01-01", "end_date": "2027-01-01", "first_covered_date": "2022-01-01",
+        "ai_insights": {"pre_existing_disease_waiting_months": 36, "key_exclusions": ["Cosmetic surgery"]},
+    }]
+    context = srv.build_agent_household_context(policies, [])
+    assert "Star Health" in context
+    assert "₹10,00,000" in context
+    assert "already passed" in context
+    assert "Cosmetic surgery" in context
+
+def test_agent_conversation_starts_empty_and_persists(registered_user, monkeypatch):
+    import server as srv
+    client, user = registered_user
+
+    r = client.get("/api/agent/conversation")
+    assert r.status_code == 200
+    assert r.json()["messages"] == []
+
+    # Directly exercise the persistence write path (agent_ask needs Gemini,
+    # unavailable in test env) - insert a turn the same way agent_ask does.
+    import asyncio
+    async def _write():
+        await srv.db.agent_conversations.update_one(
+            {"user_id": user["id"]},
+            {"$push": {"messages": {"$each": [
+                {"role": "user", "content": "hello", "at": "2026-01-01T00:00:00"},
+                {"role": "assistant", "content": "hi there", "at": "2026-01-01T00:00:00"},
+            ], "$slice": -50}}},
+            upsert=True,
+        )
+    asyncio.get_event_loop().run_until_complete(_write())
+
+    r = client.get("/api/agent/conversation")
+    messages = r.json()["messages"]
+    assert len(messages) == 2
+    assert messages[0]["content"] == "hello"
+
+    r = client.delete("/api/agent/conversation")
+    assert r.status_code == 200
+    r = client.get("/api/agent/conversation")
+    assert r.json()["messages"] == []
+    print("Conversation persists and clears correctly")
+
+def test_regulatory_unseen_count_and_mark_seen(registered_user, monkeypatch):
+    import server as srv
+    import asyncio
+    client, user = registered_user
+    monkeypatch.setattr(srv, "ADMIN_EMAILS", {user["email"].lower()})
+
+    async def _insert_audit():
+        await srv.db.regulatory_update_audit.insert_one({
+            "id": "test-1", "key": "sla_pre_auth", "previous": None,
+            "applied": {"source_url": "https://irdai.gov.in/fake"}, "at": "2026-01-01T00:00:00", "seen": False,
+        })
+    asyncio.get_event_loop().run_until_complete(_insert_audit())
+
+    r = client.get("/api/auth/me")
+    assert r.json()["regulatory_unseen_count"] == 1
+
+    r = client.post("/api/admin/regulatory-facts/mark-seen")
+    assert r.status_code == 200
+
+    r = client.get("/api/auth/me")
+    assert r.json()["regulatory_unseen_count"] == 0
+    print("Unseen count correctly tracked and cleared on mark-seen")

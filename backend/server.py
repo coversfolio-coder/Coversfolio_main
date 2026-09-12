@@ -87,6 +87,11 @@ EMAIL_ENABLED = bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD and FROM_EMAIL)
 # secure and audit), access is controlled by an env var the site operator sets
 # directly in the deployment - the same pattern already used for SMTP/Gemini config.
 ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+# Lets an external scheduler (cron-job.org, GitHub Actions, DO's own Scheduled
+# Jobs, etc.) trigger the automatic regulatory-fact check without needing an
+# admin's own login session - this is what actually makes the check run on a
+# recurring schedule rather than only when an admin happens to click a button.
+REGULATORY_CHECK_SECRET = os.environ.get("REGULATORY_CHECK_SECRET", "")
 
 
 def is_platform_admin(user: dict) -> bool:
@@ -574,6 +579,32 @@ ESCALATION_PATH = [
         "citation": "A free, quasi-judicial forum (cioins.co.in) for disputes up to ₹50 lakh - binding on the insurer if you accept the award, no advocate required, typically resolved in about 90 days. You must first have gone through your insurer's own grievance process. The 1-year filing deadline is strict, so don't wait to escalate if your grievance goes nowhere.",
     },
 ]
+
+
+async def get_effective_regulatory_facts() -> dict:
+    """Merges the hardcoded, human-verified regulatory facts with any
+    automatic updates the IRDAI-monitoring agent has applied - the hardcoded
+    values remain the safe fallback if nothing's been overridden, so this can
+    never return less than what's always been here. Overrides are stored
+    generically (one collection, a 'key' per fact) rather than migrating
+    every constant into its own schema, to keep the one real call site simple
+    and the blast radius of this change small."""
+    overrides = {o["key"]: o async for o in db.regulatory_fact_overrides.find({}, {"_id": 0})}
+
+    sla = {}
+    for key, base in SLA_DEFINITIONS.items():
+        o = overrides.get(f"sla_{key}")
+        sla[key] = {**base, "hours": o["hours"], "citation": o["citation"]} if o else dict(base)
+
+    rule_override = overrides.get("reimbursement_query_rule")
+    reimbursement_query_rule = rule_override["citation"] if rule_override else REIMBURSEMENT_QUERY_RULE
+
+    escalation_path = []
+    for step in ESCALATION_PATH:
+        o = overrides.get(f"escalation_step_{step['step']}")
+        escalation_path.append({**step, "timeframe": o["timeframe"], "citation": o["citation"]} if o else dict(step))
+
+    return {"sla": sla, "reimbursement_query_rule": reimbursement_query_rule, "escalation_path": escalation_path}
 
 
 class SlaStart(BaseModel):
@@ -1211,6 +1242,73 @@ def classify_document_fallback(text: str) -> dict:
     return {"category": category, "bill_amount": bill_amount, "bill_date": bill_date}
 
 
+class RegulatoryFactCheck(BaseModel):
+    key: str = Field(description="Exactly the fact key given in the input, unchanged")
+    still_accurate: bool = Field(description="True if the current value is still correct per the latest available information")
+    updated_hours: float | None = Field(default=None, description="Only for SLA-timing facts: the new number of hours, if it has genuinely changed - null otherwise")
+    updated_timeframe: str | None = Field(default=None, description="Only for the escalation-path fact: the new timeframe text, if it has genuinely changed - null otherwise")
+    updated_citation: str | None = Field(default=None, description="The new citation text if anything changed, referencing the specific circular/regulation found")
+    source_url: str | None = Field(default=None, description="A real, specific URL supporting the update - null if not confidently found")
+    confidence: str = Field(description="Exactly one of: high, medium, low")
+
+
+class RegulatoryFactCheckResult(BaseModel):
+    checks: list[RegulatoryFactCheck]
+
+
+REGULATORY_CHECK_PROMPT = """You are verifying whether specific facts about Indian health insurance regulation (IRDAI rules) are still accurate, using live web search.
+
+For EACH fact given below, search for the most current, authoritative information (IRDAI's own circulars and website are the best sources) and determine:
+1. Is this fact still accurate as currently stated?
+2. If not, what is the correct, current value - with a real, specific source URL?
+
+Be conservative. Only report still_accurate=false if you find a specific, credible, dated source clearly showing the rule has changed - not because you're simply unsure. If you cannot find a clear, authoritative source either confirming or updating a fact, report still_accurate=true with confidence 'low' rather than guessing a change. A false "this changed" is worse than missing a real change, since this system updates automatically with no human review step.
+
+Facts to verify:
+{facts_json}"""
+
+
+def check_regulatory_facts_with_gemini(facts: list[dict]) -> dict:
+    """Uses Gemini with live Google Search grounding to verify the app's cited
+    IRDAI facts are still current - genuinely fetching from the web via the
+    app's own backend, not a one-off manual check. Deliberately conservative
+    per the prompt above: automatic updates carry real risk if wrong, so this
+    only reports a change when a credible, dated source actually supports it."""
+    if not GEMINI_API_KEY:
+        raise AIAnalysisUnavailable("AI analysis is not configured on this server")
+
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=60_000))
+    prompt = REGULATORY_CHECK_PROMPT.format(facts_json=json.dumps(facts, indent=2))
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[prompt],
+            config=genai_types.GenerateContentConfig(
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                temperature=0.1,
+            ),
+        )
+        # Grounded generation can't also request structured JSON output in one
+        # call, so ask a second, ungrounded pass to shape the grounded
+        # findings into the exact schema needed.
+        shape_response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                "Convert the following research findings into the exact structured format requested. Do not add new information - only reshape what's given.\n\n" + response.text,
+                f"The facts being checked, for reference to match keys correctly:\n{json.dumps(facts, indent=2)}",
+            ],
+            config=genai_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=RegulatoryFactCheckResult,
+                temperature=0.0,
+            ),
+        )
+        parsed = RegulatoryFactCheckResult.model_validate_json(shape_response.text)
+        return {"checks": [c.model_dump() for c in parsed.checks], "raw_research": response.text}
+    except Exception as exc:
+        raise AIAnalysisFailed(str(exc)) from exc
+
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -1245,6 +1343,16 @@ async def current_user(request: Request) -> dict:
     if not user or user.get("status") == "revoked":
         raise HTTPException(status_code=401, detail="Account not found")
     return user
+
+
+async def optional_current_user(request: Request) -> dict | None:
+    """Same as current_user, but returns None instead of raising 401 - for
+    endpoints that can also be called without a login session, by something
+    holding a shared secret instead (like an external scheduler)."""
+    try:
+        return await current_user(request)
+    except HTTPException:
+        return None
 
 
 def set_session(response: Response, user: dict):
@@ -1511,7 +1619,10 @@ async def google_sign_in(input: GoogleSignIn, response: Response):
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(current_user)):
-    return public_user(user)
+    result = public_user(user)
+    if result["is_platform_admin"]:
+        result["regulatory_unseen_count"] = await db.regulatory_update_audit.count_documents({"seen": False})
+    return result
 
 
 @api_router.post("/auth/logout")
@@ -1661,6 +1772,100 @@ async def admin_list_users(user: dict = Depends(current_user)):
             for u in users
         ],
     }
+
+
+def _sla_fact_entries(sla: dict) -> list[dict]:
+    return [{"key": f"sla_{k}", "current_hours": v["hours"], "current_citation": v["citation"]} for k, v in sla.items()]
+
+
+def _escalation_fact_entries(escalation_path: list[dict]) -> list[dict]:
+    return [{"key": f"escalation_step_{s['step']}", "current_timeframe": s["timeframe"], "current_citation": s["citation"]} for s in escalation_path]
+
+
+@api_router.post("/admin/regulatory-check")
+async def run_regulatory_check(secret: str | None = None, user: dict | None = Depends(optional_current_user)):
+    """Automatically checks the app's cited IRDAI facts against live web
+    search, and applies any credible, sourced update it finds - no human
+    approval step, per an explicit choice to prioritize staying current over
+    a review gate. The safety net instead: every fact keeps its source link
+    and a 'last verified' date visible, and every automatic change is fully
+    logged (key, old value, new value, source, timestamp) so nothing changes
+    invisibly, even without a blocking review. Callable either by a logged-in
+    admin, or by an external scheduler holding REGULATORY_CHECK_SECRET - the
+    latter is what actually makes this run on a recurring schedule."""
+    is_admin_call = user is not None and is_platform_admin(user)
+    is_secret_call = bool(REGULATORY_CHECK_SECRET) and secret == REGULATORY_CHECK_SECRET
+    if not (is_admin_call or is_secret_call):
+        raise HTTPException(status_code=403, detail="Not authorized to run the regulatory check")
+
+    current = await get_effective_regulatory_facts()
+    facts_to_check = _sla_fact_entries(current["sla"]) + _escalation_fact_entries(current["escalation_path"]) + [
+        {"key": "reimbursement_query_rule", "current_citation": current["reimbursement_query_rule"]},
+    ]
+
+    try:
+        result = await asyncio.to_thread(check_regulatory_facts_with_gemini, facts_to_check)
+    except AIAnalysisUnavailable as exc:
+        raise HTTPException(status_code=501, detail="AI analysis is not configured on this server") from exc
+    except AIAnalysisFailed as exc:
+        logger.error("Regulatory fact check failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Couldn't complete the regulatory check - try again") from exc
+
+    now = datetime.now(timezone.utc).isoformat()
+    applied_changes = []
+    for check in result["checks"]:
+        # Conservative gate: only apply a change with a real source URL and
+        # at least medium confidence - matches the prompt's own instruction,
+        # enforced again here in code rather than trusting the model alone.
+        if check["still_accurate"] or not check["source_url"] or check["confidence"] == "low":
+            continue
+        key = check["key"]
+        existing = await db.regulatory_fact_overrides.find_one({"key": key}, {"_id": 0})
+        override_doc = {
+            "key": key, "citation": check["updated_citation"] or (existing or {}).get("citation"),
+            "source_url": check["source_url"], "updated_at": now,
+            "confidence": check["confidence"], "previous_value": existing,
+        }
+        if key.startswith("sla_") and check["updated_hours"] is not None:
+            override_doc["hours"] = check["updated_hours"]
+        elif key.startswith("escalation_step_") and check["updated_timeframe"] is not None:
+            override_doc["timeframe"] = check["updated_timeframe"]
+        await db.regulatory_fact_overrides.update_one({"key": key}, {"$set": override_doc}, upsert=True)
+        await db.regulatory_update_audit.insert_one({
+            "id": str(uuid.uuid4()), "key": key, "previous": existing, "applied": override_doc, "at": now, "seen": False,
+        })
+        applied_changes.append({"key": key, "source_url": check["source_url"], "confidence": check["confidence"]})
+
+    await db.regulatory_check_runs.insert_one({
+        "id": str(uuid.uuid4()), "at": now, "checked_count": len(facts_to_check),
+        "applied_count": len(applied_changes), "applied_changes": applied_changes,
+    })
+    return {"checked_count": len(facts_to_check), "applied_changes": applied_changes, "checked_at": now}
+
+
+@api_router.get("/admin/regulatory-facts")
+async def get_regulatory_facts_admin(user: dict = Depends(current_user)):
+    """Shows every currently-cited regulatory fact plus its source and
+    last-verified date, and the full audit trail of automatic changes -
+    the transparency that stands in for a blocking approval step."""
+    if not is_platform_admin(user):
+        raise HTTPException(status_code=403, detail="Not authorized to view regulatory facts")
+    current = await get_effective_regulatory_facts()
+    overrides = {o["key"]: o async for o in db.regulatory_fact_overrides.find({}, {"_id": 0})}
+    audit = await db.regulatory_update_audit.find({}, {"_id": 0}).sort("at", -1).to_list(200)
+    last_run = await db.regulatory_check_runs.find_one({}, {"_id": 0}, sort=[("at", -1)])
+    return {"facts": current, "overrides": overrides, "audit_log": audit, "last_run": last_run}
+
+
+@api_router.post("/admin/regulatory-facts/mark-seen")
+async def mark_regulatory_facts_seen(user: dict = Depends(current_user)):
+    """Clears the unseen-change badge - called when an admin actually opens
+    the regulatory facts panel, so the notification means something (it
+    reflects genuinely unreviewed changes, not just 'has ever changed')."""
+    if not is_platform_admin(user):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.regulatory_update_audit.update_many({"seen": False}, {"$set": {"seen": True}})
+    return {"ok": True}
 
 
 def regulatory_note_for_claim_type(claim_type: str) -> str:
@@ -2902,6 +3107,7 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
     the summary that makes filling either one out from scratch unnecessary."""
     claim = await _load_claim(claim_id, user)
     household = await household_for(user)
+    regulatory_facts = await get_effective_regulatory_facts()
 
     policy = None
     if claim.get("policy_id"):
@@ -3073,11 +3279,11 @@ async def generate_claim_form(claim_id: str, user: dict = Depends(current_user))
         # shows entitlements that actually apply to this claim's type.
         "know_your_rights": [
             {"label": v["label"], "timeframe": f"{v['hours']} hour{'s' if v['hours'] != 1 else ''}" if v["hours"] < 24 else f"{v['hours'] // 24} days", "citation": v["citation"]}
-            for v in SLA_DEFINITIONS.values() if claim["type"] in v["applicable_to"]
-        ] + ([{"label": "Document requests must come all at once", "timeframe": "within 15 days", "citation": REIMBURSEMENT_QUERY_RULE}] if claim["type"] == "Reimbursement" else []),
+            for v in regulatory_facts["sla"].values() if claim["type"] in v["applicable_to"]
+        ] + ([{"label": "Document requests must come all at once", "timeframe": "within 15 days", "citation": regulatory_facts["reimbursement_query_rule"]}] if claim["type"] == "Reimbursement" else []),
         # If this claim ever gets disputed, this is the real escalation path -
         # shown regardless of claim type, since a dispute can happen either way.
-        "escalation_path": ESCALATION_PATH,
+        "escalation_path": regulatory_facts["escalation_path"],
         # Whatever the last uploaded claim form was matched against, saved so
         # it's still here on reload - a fresh upload replaces this outright,
         # the same way a new document upload replaces an old one.
@@ -3661,6 +3867,156 @@ async def create_status_check(input: StatusCheckCreate):
     doc["timestamp"] = doc["timestamp"].isoformat()
     await db.status_checks.insert_one(doc)
     return obj
+
+
+class AgentMessage(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str = Field(max_length=2000)
+
+
+class AgentAskInput(BaseModel):
+    message: str = Field(min_length=1, max_length=1000)
+    history: list[AgentMessage] = Field(default_factory=list, max_length=10)
+
+
+AGENT_SYSTEM_PROMPT = """You are Cova, Coversfolio's in-app assistant, helping an Indian household member with their insurance policies and claims. If asked your name, say Cova.
+
+You have two kinds of information below: (1) this household's own data - their actual policies and claims, and (2) general reference information - IRDAI rules that apply to everyone, not just this household.
+
+Rules for answering:
+- If the answer comes from their own data, say so plainly (e.g. "Your Star Health policy...")
+- If the answer is general insurance/regulatory knowledge, say so too (e.g. "Under IRDAI rules in general...")
+- Never blend the two without being clear which is which
+- If you don't have enough information to answer confidently, say so rather than guessing
+- Keep answers short and practical - a few sentences, not an essay
+- You cannot take any action (you can't file a claim, upload a document, or change data) - if asked to do something, name the actual screen/button to use instead
+- If asked something with no connection to insurance, claims, or this app, say that's outside what you can help with here
+
+This household's data:
+{household_context}
+
+General reference information (IRDAI facts already verified elsewhere in this app):
+{reference_context}"""
+
+
+def format_inr(amount: float) -> str:
+    """Indian digit grouping (lakhs/crores) - e.g. 1000000 -> '10,00,000' -
+    not Python's default Western grouping, which the rest of this app never
+    uses (the frontend formats currency with toLocaleString('en-IN'))."""
+    amount_int = int(round(amount))
+    s = str(amount_int)
+    if len(s) <= 3:
+        return s
+    last_three = s[-3:]
+    rest = s[:-3]
+    groups = []
+    while len(rest) > 2:
+        groups.insert(0, rest[-2:])
+        rest = rest[:-2]
+    if rest:
+        groups.insert(0, rest)
+    return ",".join(groups) + "," + last_three
+
+
+def build_agent_household_context(policies: list[dict], claims: list[dict]) -> str:
+    if not policies and not claims:
+        return "No policies or claims added yet."
+    lines = []
+    for p in policies:
+        lines.append(f"- Policy: {p.get('insurer_name')} {p.get('policy_type')}, sum insured \u20B9{format_inr(p.get('sum_insured', 0))}, valid {p.get('start_date')} to {p.get('end_date')}")
+        insights = p.get("ai_insights") or {}
+        pdw_months = insights.get("pre_existing_disease_waiting_months")
+        if pdw_months is not None:
+            first_covered = p.get("first_covered_date") or p.get("start_date")
+            pdw_status = compute_waiting_status(first_covered, pdw_months)
+            pdw_text = "already passed" if pdw_status.get("covered_now") else f"{pdw_status.get('days_remaining')} days remaining"
+            lines.append(f"  Pre-existing disease waiting period: {pdw_text}")
+        if insights.get("key_exclusions"):
+            lines.append(f"  Key exclusions: {', '.join(insights['key_exclusions'][:5])}")
+    for c in claims:
+        lines.append(f"- Claim {c.get('id', '')[:8]}: {c.get('type')} claim, status {c.get('status', 'in progress')}, title '{c.get('title')}'")
+    return "\n".join(lines)
+
+
+def build_agent_reference_context(regulatory_facts: dict) -> str:
+    lines = []
+    for fact in regulatory_facts["sla"].values():
+        unit = "hour" if fact["hours"] < 24 else "day"
+        value = fact["hours"] if fact["hours"] < 24 else fact["hours"] // 24
+        lines.append(f"- {fact['label']}: {value} {unit}{'s' if value != 1 else ''}. {fact['citation']}")
+    lines.append(f"- {regulatory_facts['reimbursement_query_rule']}")
+    for step in regulatory_facts["escalation_path"]:
+        lines.append(f"- Escalation step {step['step']} ({step['label']}): {step['citation']}")
+    return "\n".join(lines)
+
+
+def ask_agent_with_gemini(message: str, history: list[dict], household_context: str, reference_context: str) -> str:
+    if not GEMINI_API_KEY:
+        raise AIAnalysisUnavailable("The assistant isn't configured on this server yet")
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=30_000))
+    system_prompt = AGENT_SYSTEM_PROMPT.format(household_context=household_context, reference_context=reference_context)
+    contents = []
+    for turn in history:
+        contents.append(genai_types.Content(role="user" if turn["role"] == "user" else "model", parts=[genai_types.Part.from_text(text=turn["content"])]))
+    contents.append(genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=message)]))
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL, contents=contents,
+            config=genai_types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.3, max_output_tokens=500),
+        )
+        return response.text
+    except Exception as exc:
+        raise AIAnalysisFailed(str(exc)) from exc
+
+
+@api_router.post("/agent/ask")
+async def agent_ask(input: AgentAskInput, user: dict = Depends(current_user)):
+    """The user-facing chat agent - answers using the household's own policy/
+    claim data plus the app's already-verified regulatory reference content,
+    always distinguishing which is which. Read-only: it can suggest what to
+    do, but never takes an action or changes any data itself."""
+    policies = await db.policies.find({"household_id": user["household_id"]}, {"_id": 0}).to_list(200)
+    claims = await db.claims.find({"household_id": user["household_id"]}, {"_id": 0}).to_list(200)
+    regulatory_facts = await get_effective_regulatory_facts()
+
+    household_context = build_agent_household_context(policies, claims)
+    reference_context = build_agent_reference_context(regulatory_facts)
+
+    try:
+        answer = await asyncio.to_thread(
+            ask_agent_with_gemini, input.message, [h.model_dump() for h in input.history], household_context, reference_context,
+        )
+    except AIAnalysisUnavailable as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except AIAnalysisFailed as exc:
+        logger.error("Agent ask failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Couldn't get a response - try again") from exc
+
+    now = datetime.now(timezone.utc).isoformat()
+    # Persisted per-user (not shared across the household) - this is one
+    # person's own back-and-forth with the assistant, not household data.
+    # Capped at the most recent 50 messages so this can't grow unbounded.
+    await db.agent_conversations.update_one(
+        {"user_id": user["id"]},
+        {"$push": {"messages": {"$each": [
+            {"role": "user", "content": input.message, "at": now},
+            {"role": "assistant", "content": answer, "at": now},
+        ], "$slice": -50}}},
+        upsert=True,
+    )
+    return {"answer": answer}
+
+
+@api_router.get("/agent/conversation")
+async def get_agent_conversation(user: dict = Depends(current_user)):
+    convo = await db.agent_conversations.find_one({"user_id": user["id"]}, {"_id": 0, "messages": 1})
+    return {"messages": convo["messages"] if convo else []}
+
+
+@api_router.delete("/agent/conversation")
+async def clear_agent_conversation(user: dict = Depends(current_user)):
+    await db.agent_conversations.update_one({"user_id": user["id"]}, {"$set": {"messages": []}}, upsert=True)
+    return {"ok": True}
 
 
 app.include_router(api_router)

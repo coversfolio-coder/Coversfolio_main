@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import client, { apiError } from "@/api";
 import {
   AlertTriangle, Bell, BookOpen, Check, CheckCircle2, ChevronRight, ClipboardCheck,
-  FileText, Home, LayoutDashboard, LifeBuoy, LogOut, Plus, Search, Settings, ShieldCheck,
+  FileText, Home, LayoutDashboard, LifeBuoy, LogOut, MessageCircle, Plus, Search, Send, Settings, ShieldCheck,
   Stethoscope, Trash2, Upload, User as UserIcon, X, UserPlus, UserX, History
 } from "lucide-react";
 import "@/App.css";
@@ -516,7 +516,10 @@ function AccountMenu({ user, onManageAccess, onSignOut, onSupport, onOpenAdminSt
               <button role="menuitem" onClick={() => { setOpen(false); onManageAccess(); }} data-testid="account-menu-manage-access"><Settings size={15} /><span>Manage members</span></button>
             )}
             {user.is_platform_admin && (
-              <button role="menuitem" onClick={() => { setOpen(false); onOpenAdminStats(); }} data-testid="account-menu-admin-stats"><LayoutDashboard size={15} /><span>Admin stats</span></button>
+              <button role="menuitem" onClick={() => { setOpen(false); onOpenAdminStats(); }} data-testid="account-menu-admin-stats">
+                <LayoutDashboard size={15} /><span>Admin stats</span>
+                {user.regulatory_unseen_count > 0 && <span className="chip chip-red" style={{ marginLeft: 6, fontSize: 9 }}>{user.regulatory_unseen_count}</span>}
+              </button>
             )}
             <button role="menuitem" onClick={() => { setOpen(false); onSupport(); }} data-testid="account-menu-support"><LifeBuoy size={15} /><span>Support centre</span></button>
             <button role="menuitem" className="danger" onClick={() => { setOpen(false); onSignOut(); }} data-testid="account-menu-signout"><LogOut size={15} /><span>Sign out</span></button>
@@ -525,6 +528,84 @@ function AccountMenu({ user, onManageAccess, onSignOut, onSupport, onOpenAdminSt
         </div>
       )}
     </div>
+  );
+}
+
+function AgentWidget({ notify }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    client.get("/agent/conversation")
+      .then((res) => setMessages(res.data.messages.map((m) => ({ role: m.role, content: m.content }))))
+      .catch(() => {})
+      .finally(() => setLoadingHistory(false));
+  }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, sending]);
+
+  const clearConversation = async () => {
+    if (!window.confirm("Clear this conversation? This can't be undone.")) return;
+    try { await client.delete("/agent/conversation"); setMessages([]); } catch (err) { notify(apiError(err), true); }
+  };
+
+  const send = async (e) => {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || sending) return;
+    const history = messages.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setInput("");
+    setSending(true);
+    try {
+      const res = await client.post("/agent/ask", { message: text, history });
+      setMessages((prev) => [...prev, { role: "assistant", content: res.data.answer }]);
+    } catch (err) {
+      const message = err?.response?.status === 501
+        ? "The assistant isn't set up on this server yet."
+        : "Sorry, I couldn't get a response - try again.";
+      setMessages((prev) => [...prev, { role: "assistant", content: message }]);
+    } finally { setSending(false); }
+  };
+
+  return (
+    <>
+      <button className="agent-fab" onClick={() => setOpen((v) => !v)} aria-label="Ask Cova" data-testid="agent-widget-toggle">
+        {open ? <X size={20} /> : <MessageCircle size={20} />}
+      </button>
+      {open && (
+        <div className="agent-panel" data-testid="agent-widget-panel">
+          <div className="agent-panel-header">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <strong>Ask Cova</strong>
+              {messages.length > 0 && <button type="button" className="text-button" style={{ padding: 0, fontSize: 10 }} onClick={clearConversation} data-testid="clear-agent-conversation-button">Clear</button>}
+            </div>
+            <p>Search your policies and claims, or ask a general insurance question.</p>
+          </div>
+          <div className="agent-messages" ref={scrollRef} data-testid="agent-messages">
+            {loadingHistory ? (
+              <p className="agent-empty-hint">Loading…</p>
+            ) : messages.length === 0 ? (
+              <p className="agent-empty-hint">Try: "When does my waiting period end?" or "What's a proportionate deduction?"</p>
+            ) : null}
+            {messages.map((m, i) => (
+              <div key={i} className={`agent-message agent-message-${m.role}`} data-testid={`agent-message-${i}`}>{m.content}</div>
+            ))}
+            {sending && <div className="agent-message agent-message-assistant agent-typing" data-testid="agent-typing">Thinking…</div>}
+          </div>
+          <form onSubmit={send} className="agent-input-row">
+            <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask a question…" data-testid="agent-input" />
+            <button type="submit" disabled={sending || !input.trim()} aria-label="Send" data-testid="agent-send-button"><Send size={16} /></button>
+          </form>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -639,10 +720,13 @@ function App() {
   const [adminStatsOpen, setAdminStatsOpen] = useState(false);
   const [landingStatsEdit, setLandingStatsEdit] = useState(null);
   const [savingLandingStats, setSavingLandingStats] = useState(false);
+  const [regulatoryFacts, setRegulatoryFacts] = useState(null);
+  const [runningCheck, setRunningCheck] = useState(false);
   const openAdminStats = async () => {
     setAdminStatsOpen(true);
     setAdminStats(null);
     setAdminUsers(null);
+    setRegulatoryFacts(null);
     try {
       const res = await client.get("/admin/stats");
       setAdminStats(res.data);
@@ -650,7 +734,22 @@ function App() {
       setAdminUsers(usersRes.data.users);
       const statsRes = await client.get("/public/landing-stats");
       setLandingStatsEdit(statsRes.data.stats);
+      const regRes = await client.get("/admin/regulatory-facts");
+      setRegulatoryFacts(regRes.data);
+      if (regRes.data.audit_log.some((entry) => entry.seen === false)) {
+        await client.post("/admin/regulatory-facts/mark-seen");
+        setUser((prev) => ({ ...prev, regulatory_unseen_count: 0 }));
+      }
     } catch (err) { notify(apiError(err), true); setAdminStatsOpen(false); }
+  };
+  const runRegulatoryCheck = async () => {
+    setRunningCheck(true);
+    try {
+      const res = await client.post("/admin/regulatory-check");
+      notify(res.data.applied_changes.length > 0 ? `Checked ${res.data.checked_count} facts, updated ${res.data.applied_changes.length}` : `Checked ${res.data.checked_count} facts - all still accurate`);
+      const regRes = await client.get("/admin/regulatory-facts");
+      setRegulatoryFacts(regRes.data);
+    } catch (err) { notify(apiError(err), true); } finally { setRunningCheck(false); }
   };
   const saveLandingStats = async () => {
     setSavingLandingStats(true);
@@ -676,6 +775,7 @@ function App() {
   }
 
   return <div className="app-shell">
+    <AgentWidget notify={notify} />
     <main className="main-content">
       <header className="topbar">
         <div className="wordmark" data-testid="brand-mark">
@@ -1018,6 +1118,65 @@ function App() {
                         {savingLandingStats ? "Saving…" : "Save changes"}
                       </button>
                     </div>
+                  </>
+                )}
+              </div>
+
+              <div style={{ borderTop: "1px solid var(--line)", marginTop: 22, paddingTop: 18 }}>
+                <p className="eyebrow">REGULATORY FACTS</p>
+                <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>IRDAI facts &amp; auto-update agent</h3>
+                <p className="readonly-hint" style={{ marginBottom: 14 }}>
+                  Checks every cited fact against live web search and applies credible, sourced updates automatically - no approval step, by design. Every change stays fully logged below, and every fact keeps its source link so anyone can verify it independently.
+                </p>
+                {!regulatoryFacts ? (
+                  <p className="readonly-hint">Loading…</p>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                      <button type="button" className="primary-button" disabled={runningCheck} onClick={runRegulatoryCheck} data-testid="run-regulatory-check-button">
+                        {runningCheck ? "Checking against live sources…" : "Check for updates now"}
+                      </button>
+                      {regulatoryFacts.last_run && (
+                        <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                          Last run: {new Date(regulatoryFacts.last_run.at).toLocaleString("en-IN")} · checked {regulatoryFacts.last_run.checked_count}, updated {regulatoryFacts.last_run.applied_count}
+                        </span>
+                      )}
+                    </div>
+
+                    <p style={{ fontSize: 10, color: "var(--faint)", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: 0.5 }}>Current facts (auto-updated shown with a source link)</p>
+                    {Object.entries(regulatoryFacts.facts.sla).map(([key, fact]) => {
+                      const override = regulatoryFacts.overrides[`sla_${key}`];
+                      return (
+                        <div key={key} className="entry" style={{ marginBottom: 8 }} data-testid={`regulatory-fact-sla-${key}`}>
+                          <header style={{ marginBottom: 4 }}>
+                            <div style={{ flex: 1 }}><strong style={{ fontSize: 12 }}>{fact.label}</strong></div>
+                            <span className="chip chip-neutral">{fact.hours} hour{fact.hours === 1 ? "" : "s"}</span>
+                          </header>
+                          <p style={{ fontSize: 10, color: "var(--muted)", margin: 0, lineHeight: 1.5 }}>{fact.citation}</p>
+                          {override ? (
+                            <p style={{ fontSize: 9.5, color: "var(--teal)", margin: "4px 0 0" }}>
+                              Auto-updated {new Date(override.updated_at).toLocaleDateString("en-IN")} · <a href={override.source_url} target="_blank" rel="noreferrer">source</a> · confidence: {override.confidence}
+                            </p>
+                          ) : (
+                            <p style={{ fontSize: 9.5, color: "var(--faint)", margin: "4px 0 0" }}>Original verified value - no automatic update applied yet</p>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {regulatoryFacts.audit_log.length > 0 && (
+                      <>
+                        <p style={{ fontSize: 10, color: "var(--faint)", margin: "16px 0 8px", textTransform: "uppercase", letterSpacing: 0.5 }}>Audit log - every automatic change</p>
+                        {regulatoryFacts.audit_log.map((entry) => (
+                          <div key={entry.id} className="entry" style={{ marginBottom: 8 }} data-testid={`audit-entry-${entry.id}`}>
+                            <p style={{ fontSize: 11, margin: 0 }}><strong>{entry.key}</strong> updated {new Date(entry.at).toLocaleString("en-IN")}</p>
+                            <p style={{ fontSize: 10, color: "var(--muted)", margin: "4px 0 0" }}>
+                              <a href={entry.applied.source_url} target="_blank" rel="noreferrer">Source</a> · confidence: {entry.applied.confidence}
+                            </p>
+                          </div>
+                        ))}
+                      </>
+                    )}
                   </>
                 )}
               </div>
