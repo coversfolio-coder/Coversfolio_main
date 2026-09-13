@@ -453,6 +453,12 @@ function AuthScreen({ onAuthenticated, initialMode = "login", onBack }) {
             Coversfolio helps Indian households organize insurance policies and prepare everything needed to file a claim - clearly, privately, on your own terms. We compile your file; we don't sell insurance, settle claims, or act as your insurer's intermediary.
           </p>
 
+          <div className="auth-art-tools">
+            <span>TRY THESE FIRST - FREE, NO SIGN-UP NEEDED</span>
+            <a href="/guides/waiting-period-calculator.html" data-testid="auth-link-waiting-period-tool">Waiting period calculator →</a>
+            <a href="/guides/claim-documents-checklist.html" data-testid="auth-link-checklist-tool">Claim documents checklist →</a>
+          </div>
+
           <div className="auth-art-features">
             <div className="auth-art-feature">
               <BookOpen size={17} />
