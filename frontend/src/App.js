@@ -151,14 +151,14 @@ function LandingPage({ onGetStarted, onLogin }) {
       </header>
 
       <section className="landing-hero">
-        <p className="landing-eyebrow">FOR INDIAN HOUSEHOLDS</p>
-        <h1>Your claim shouldn't get rejected<br />over a missing form.</h1>
+        <p className="landing-eyebrow">BUILT FOR INDIAN HOUSEHOLDS</p>
+        <h1>Understand your insurance.<br />Be ready when you need to claim.</h1>
         <p className="landing-lede">
-          Coversfolio organizes your insurance policies and compiles exactly what your insurer needs to process a claim -
-          so paperwork isn't what costs your family the payout you're owed.
+          Coversfolio helps Indian households organize their insurance policies and prepare the documents they need for a claim -
+          so missing paperwork doesn't stand between your family and the payout you're owed.
         </p>
         <div className="landing-hero-actions">
-          <button className="btn primary large" onClick={onGetStarted} data-testid="landing-hero-cta">Get started free</button>
+          <button className="btn primary large" onClick={onGetStarted} data-testid="landing-hero-cta">Get started free →</button>
         </div>
         <div className="landing-hero-tools">
           <span>Free, no sign-up needed:</span>
