@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import client, { API, apiError } from "@/api";
 import {
   X, FileText, MessageSquare, IndianRupee, AlertTriangle,
-  Undo2, Check, Plus, ClipboardList, ShieldAlert, CheckCircle2, Files, Link2, FileSpreadsheet, Trash2, Upload, Eye
+  Undo2, Check, Plus, ClipboardList, ShieldAlert, CheckCircle2, Files, Link2, FileSpreadsheet, Trash2, Upload, Eye, FileStack
 } from "lucide-react";
 
 
@@ -584,6 +584,16 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                         <FileSpreadsheet size={20} />
                         <b>Claim summary (PDF)</b>
                         <small>Hospitalization details, bill totals, and coverage check - ready to download.</small>
+                      </a>
+                      <a
+                        href={`${API}/claims/${claimId}/compiled-pdf`}
+                        target="_blank" rel="noopener noreferrer"
+                        className="cf-packitem" style={{ textDecoration: "none", color: "inherit", display: "block" }}
+                        data-testid="download-compiled-pdf-button"
+                      >
+                        <FileStack size={20} />
+                        <b>Everything, one PDF</b>
+                        <small>Claim summary plus every attached document, in order - ready to hand to a TPA desk or attach to one email.</small>
                       </a>
                       <button type="button" className="cf-packitem" style={{ textAlign: "left", background: "#fff", cursor: "pointer", width: "100%" }} onClick={() => setTab("packet")} data-testid="claimform-jump-to-packet">
                         <Files size={20} />

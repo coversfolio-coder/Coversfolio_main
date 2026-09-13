@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import client, { apiError } from "@/api";
 import {
   AlertTriangle, Bell, BookOpen, Check, CheckCircle2, ChevronRight, ClipboardCheck,
-  FileText, Home, LayoutDashboard, LifeBuoy, LogOut, MessageCircle, Plus, Search, Send, Settings, ShieldCheck,
-  Stethoscope, Trash2, Upload, User as UserIcon, X, UserPlus, UserX, History
+  FileText, Home, LayoutDashboard, LifeBuoy, LogOut, Plus, Search, Send, Settings, ShieldCheck,
+  Sparkles, Stethoscope, Trash2, Upload, User as UserIcon, X, UserPlus, UserX, History
 } from "lucide-react";
 import "@/App.css";
 import "@/Auth.css";
@@ -531,6 +531,12 @@ function AccountMenu({ user, onManageAccess, onSignOut, onSupport, onOpenAdminSt
   );
 }
 
+const AGENT_SUGGESTIONS = [
+  "When does my waiting period end?",
+  "What's a proportionate deduction?",
+  "What documents do I need for my claim?",
+];
+
 function AgentWidget({ notify }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
@@ -555,10 +561,8 @@ function AgentWidget({ notify }) {
     try { await client.delete("/agent/conversation"); setMessages([]); } catch (err) { notify(apiError(err), true); }
   };
 
-  const send = async (e) => {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || sending) return;
+  const ask = async (text) => {
+    if (!text.trim() || sending) return;
     const history = messages.slice(-10).map((m) => ({ role: m.role, content: m.content }));
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setInput("");
@@ -574,33 +578,59 @@ function AgentWidget({ notify }) {
     } finally { setSending(false); }
   };
 
+  const send = (e) => { e.preventDefault(); ask(input.trim()); };
+
   return (
     <>
       <button className="agent-fab" onClick={() => setOpen((v) => !v)} aria-label="Ask Cova" data-testid="agent-widget-toggle">
-        {open ? <X size={20} /> : <MessageCircle size={20} />}
+        {!open && <span className="agent-fab-ring" aria-hidden="true" />}
+        {open ? <X size={20} /> : <Sparkles size={20} />}
       </button>
+      {!open && <span className="agent-fab-label" aria-hidden="true">Cova</span>}
       {open && (
         <div className="agent-panel" data-testid="agent-widget-panel">
           <div className="agent-panel-header">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <strong>Ask Cova</strong>
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span className="agent-avatar"><Sparkles size={14} /></span>
+                <div>
+                  <strong>Cova</strong>
+                  <span className="agent-online-pill"><span className="agent-online-dot" />AI assistant</span>
+                </div>
+              </div>
               {messages.length > 0 && <button type="button" className="text-button" style={{ padding: 0, fontSize: 10 }} onClick={clearConversation} data-testid="clear-agent-conversation-button">Clear</button>}
             </div>
-            <p>Search your policies and claims, or ask a general insurance question.</p>
           </div>
           <div className="agent-messages" ref={scrollRef} data-testid="agent-messages">
             {loadingHistory ? (
               <p className="agent-empty-hint">Loading…</p>
             ) : messages.length === 0 ? (
-              <p className="agent-empty-hint">Try: "When does my waiting period end?" or "What's a proportionate deduction?"</p>
+              <>
+                <div className="agent-message agent-message-assistant" data-testid="agent-greeting">
+                  Hi, I'm Cova. Ask me about your policies, your claims, or a general insurance question - whatever's easiest.
+                </div>
+                <div className="agent-suggestions" data-testid="agent-suggestions">
+                  {AGENT_SUGGESTIONS.map((s) => (
+                    <button type="button" key={s} className="agent-suggestion-chip" onClick={() => ask(s)} data-testid={`agent-suggestion-${s}`}>{s}</button>
+                  ))}
+                </div>
+              </>
             ) : null}
             {messages.map((m, i) => (
-              <div key={i} className={`agent-message agent-message-${m.role}`} data-testid={`agent-message-${i}`}>{m.content}</div>
+              <div key={i} style={{ display: "flex", gap: 7, alignItems: "flex-end", flexDirection: m.role === "user" ? "row-reverse" : "row" }}>
+                {m.role === "assistant" && <span className="agent-avatar agent-avatar-sm"><Sparkles size={10} /></span>}
+                <div className={`agent-message agent-message-${m.role}`} data-testid={`agent-message-${i}`}>{m.content}</div>
+              </div>
             ))}
-            {sending && <div className="agent-message agent-message-assistant agent-typing" data-testid="agent-typing">Thinking…</div>}
+            {sending && (
+              <div style={{ display: "flex", gap: 7, alignItems: "flex-end" }}>
+                <span className="agent-avatar agent-avatar-sm"><Sparkles size={10} /></span>
+                <div className="agent-message agent-message-assistant agent-typing" data-testid="agent-typing">Thinking…</div>
+              </div>
+            )}
           </div>
           <form onSubmit={send} className="agent-input-row">
-            <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask a question…" data-testid="agent-input" />
+            <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask Cova anything…" data-testid="agent-input" />
             <button type="submit" disabled={sending || !input.trim()} aria-label="Send" data-testid="agent-send-button"><Send size={16} /></button>
           </form>
         </div>

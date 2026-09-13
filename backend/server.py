@@ -35,7 +35,8 @@ from google.genai import types as genai_types
 from motor.motor_asyncio import AsyncIOMotorClient
 import ocr as ocr_module
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
+from PIL import Image as PILImage
 import pdfplumber
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -3505,6 +3506,76 @@ async def download_claim_form_pdf(claim_id: str, user: dict = Depends(current_us
     return StreamingResponse(
         pdf_buf, media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="claim-summary-{claim_id}.pdf"'},
+    )
+
+
+def _image_bytes_to_pdf_page(image_bytes: bytes):
+    """Converts one image into a single-page in-memory PDF, so it can be
+    merged alongside real PDF documents into one combined file."""
+    img = PILImage.open(io.BytesIO(image_bytes))
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PDF")
+    buf.seek(0)
+    return PdfReader(buf).pages[0]
+
+
+@api_router.get("/claims/{claim_id}/compiled-pdf")
+async def download_compiled_pdf(claim_id: str, user: dict = Depends(current_user)):
+    """The final, one-file version of a claim: the Cheat Sheet followed by
+    every attached document, in checklist order - genuinely ready to hand to
+    a TPA desk or attach to one email, rather than the Cheat Sheet and the
+    documents living as separate things the person has to assemble themselves."""
+    claim = await _load_claim(claim_id, user)
+    data = await generate_claim_form(claim_id, user)
+    cheat_sheet_pdf = render_claim_form_pdf(data)
+
+    writer = PdfWriter()
+    for page in PdfReader(cheat_sheet_pdf).pages:
+        writer.add_page(page)
+
+    docs = await db.documents.find({"household_id": user["household_id"], "linked_claim_id": claim_id}, {"_id": 0}).sort("category", 1).to_list(200)
+    skipped = []
+    for doc in docs:
+        try:
+            file_bytes = await asyncio.to_thread(storage_load, doc["stored_path"])
+            content_type = doc.get("content_type", "")
+            if content_type == "application/pdf":
+                for page in PdfReader(io.BytesIO(file_bytes)).pages:
+                    writer.add_page(page)
+            elif content_type.startswith("image/"):
+                writer.add_page(await asyncio.to_thread(_image_bytes_to_pdf_page, file_bytes))
+            else:
+                skipped.append(doc["filename"])
+        except Exception as exc:
+            logger.warning("Skipping document %s in compiled PDF: %s", doc.get("id"), exc)
+            skipped.append(doc.get("filename", "unknown file"))
+
+    if skipped:
+        note_buf = io.BytesIO()
+        note_doc = SimpleDocTemplate(note_buf, pagesize=A4)
+        styles = getSampleStyleSheet()
+        note_doc.build([
+            Paragraph("Not included in this compiled PDF", styles["Heading2"]),
+            Spacer(1, 8),
+            Paragraph(
+                "The following attached files couldn't be included automatically (usually a Word document or an "
+                "unsupported format) - please attach them separately: " + ", ".join(skipped),
+                styles["Normal"],
+            ),
+        ])
+        note_buf.seek(0)
+        for page in PdfReader(note_buf).pages:
+            writer.add_page(page)
+
+    output = io.BytesIO()
+    writer.write(output)
+    output.seek(0)
+    await audit(user, "compiled_pdf_downloaded", f"Downloaded compiled claim PDF for {claim_id} ({len(docs) - len(skipped)} documents included, {len(skipped)} skipped)")
+    return StreamingResponse(
+        output, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="claim-compiled-{claim_id}.pdf"'},
     )
 
 
