@@ -304,3 +304,9 @@ button.profile:hover{background:rgba(255,255,255,.05)}button.profile svg{color:#
 .agent-suggestions{display:flex;flex-direction:column;gap:6px;margin-top:2px}
 .agent-suggestion-chip{align-self:flex-start;background:#fff;border:1px solid var(--line);color:var(--navy);font-size:11.5px;padding:7px 12px;border-radius:14px;cursor:pointer;text-align:left;transition:background-color .15s,border-color .15s}
 .agent-suggestion-chip:hover{background:var(--canvas);border-color:var(--navy)}
+
+.landing-hero-tools{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;margin-top:22px;font-size:12.5px}
+.landing-hero-tools span{color:#8be4d5;font-weight:600}
+.landing-hero-tools a{color:#e3f3f1;text-decoration:underline;text-underline-offset:3px}
+.landing-hero-tools a:hover{color:#fff}
+@media(max-width:600px){.landing-hero-tools{gap:10px;flex-direction:column}}

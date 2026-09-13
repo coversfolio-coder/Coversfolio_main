@@ -160,6 +160,11 @@ function LandingPage({ onGetStarted, onLogin }) {
         <div className="landing-hero-actions">
           <button className="btn primary large" onClick={onGetStarted} data-testid="landing-hero-cta">Get started free</button>
         </div>
+        <div className="landing-hero-tools">
+          <span>Free, no sign-up needed:</span>
+          <a href="/guides/waiting-period-calculator.html" data-testid="link-waiting-period-tool">Waiting period calculator →</a>
+          <a href="/guides/claim-documents-checklist.html" data-testid="link-checklist-tool">Claim documents checklist →</a>
+        </div>
       </section>
 
       <StatsCarousel stats={stats} />
@@ -274,14 +279,6 @@ function LandingPage({ onGetStarted, onLogin }) {
         </div>
       </section>
 
-      <section className="landing-cta" style={{ paddingBottom: 8 }}>
-        <p className="landing-section-label">FREE TOOLS - NO SIGN-UP NEEDED</p>
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center", marginTop: 18 }}>
-          <a href="/guides/waiting-period-calculator.html" className="btn" style={{ textDecoration: "none" }} data-testid="link-waiting-period-tool">Waiting period calculator</a>
-          <a href="/guides/claim-documents-checklist.html" className="btn" style={{ textDecoration: "none" }} data-testid="link-checklist-tool">Claim documents checklist</a>
-        </div>
-      </section>
-
       <section className="landing-cta">
         <h2>Ready to get your paperwork right the first time?</h2>
         <button className="btn primary large" onClick={onGetStarted} data-testid="landing-footer-cta">Get started free</button>
@@ -366,7 +363,7 @@ function AuthScreen({ onAuthenticated, initialMode = "login", onBack }) {
         <div className="auth-copy">
           <p className="eyebrow">PRIVATE CLAIM COMPANION</p>
           <h1>{heading}</h1>
-          <p>Keep your claim file clear, together, and in your hands.</p>
+          <p>{mode === "register" ? "Free to start - tracking policies, storing documents, and compiling your claim checklist always will be." : mode === "login" ? "Good to see you again." : "Keep your claim file clear, together, and in your hands."}</p>
         </div>
 
         {(mode === "login" || mode === "register") && (
@@ -760,13 +757,11 @@ function App() {
 
   const [adminStats, setAdminStats] = useState(null);
   const [adminUsers, setAdminUsers] = useState(null);
-  const [adminStatsOpen, setAdminStatsOpen] = useState(false);
   const [landingStatsEdit, setLandingStatsEdit] = useState(null);
   const [savingLandingStats, setSavingLandingStats] = useState(false);
   const [regulatoryFacts, setRegulatoryFacts] = useState(null);
   const [runningCheck, setRunningCheck] = useState(false);
   const openAdminStats = async () => {
-    setAdminStatsOpen(true);
     setAdminStats(null);
     setAdminUsers(null);
     setRegulatoryFacts(null);
@@ -783,8 +778,9 @@ function App() {
         await client.post("/admin/regulatory-facts/mark-seen");
         setUser((prev) => ({ ...prev, regulatory_unseen_count: 0 }));
       }
-    } catch (err) { notify(apiError(err), true); setAdminStatsOpen(false); }
+    } catch (err) { notify(apiError(err), true); }
   };
+  useEffect(() => { if (active === "admin" && !adminStats) openAdminStats(); }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
   const runRegulatoryCheck = async () => {
     setRunningCheck(true);
     try {
@@ -830,6 +826,7 @@ function App() {
             <a key={id} data-testid={`nav-${id}`} className={active === id ? "active" : ""} onClick={() => navigate(id)}>{label}</a>
           ))}
           <a data-testid="nav-household" onClick={openMembers}>Members</a>
+          {user.is_platform_admin && <a data-testid="nav-admin" className={active === "admin" ? "active" : ""} onClick={() => navigate("admin")}>Admin</a>}
         </nav>
         <div className="nav-right">
           <div style={{ position: "relative" }}>
@@ -911,7 +908,7 @@ function App() {
           </div>
 
           <span className="household-pill" data-testid="household-switcher">{data.household.name}</span>
-          <AccountMenu user={user} onManageAccess={openMembers} onSignOut={signOut} onSupport={() => notify("Support centre is ready for your questions")} onOpenAdminStats={openAdminStats} />
+          <AccountMenu user={user} onManageAccess={openMembers} onSignOut={signOut} onSupport={() => notify("Support centre is ready for your questions")} onOpenAdminStats={() => navigate("admin")} />
         </div>
       </header>
       <div className="content-wrap">
@@ -1047,22 +1044,8 @@ function App() {
         {active === "policies" && <PoliciesPage canEdit={canEdit} notify={notify} prefill={policyPrefill} onPrefillConsumed={() => setPolicyPrefill(null)} />}
         {active === "evidence" && <EvidencePage canEdit={canEdit} notify={notify} />}
         {active === "documents" && <DocumentsPage canEdit={canEdit} notify={notify} onReviewAsPolicy={(detected) => { setPolicyPrefill(detected); navigate("policies"); }} />}
-      </div>
-    </main>
-    {showMembers && <div className="modal-backdrop" data-testid="members-modal"><div className="modal members-modal"><button className="close-button" aria-label="Close household access" data-testid="close-members-modal-button" onClick={() => setShowMembers(false)}><X size={18} /></button><p className="eyebrow">MEMBERS</p><h2>People in your household</h2><p className="modal-copy">Invite people to help prepare the file. Agents can view but cannot change claims.</p><form className="invite-form" onSubmit={inviteMember} data-testid="invite-member-form"><input required type="email" placeholder="person@example.com" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} data-testid="invite-email-input" /><select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} data-testid="invite-role-select"><option value="member">Household member</option><option value="agent">Read-only agent</option></select><button className="primary-button" data-testid="send-invite-button"><UserPlus size={16} /> Invite</button></form><div className="member-list" data-testid="member-list">{members.members.map(item => <div className={`member-row ${item.status === "revoked" ? "revoked" : ""}`} key={item.id} data-testid={`member-row-${item.id}`}><span className="avatar avatar-small">{item.name.slice(0, 2).toUpperCase()}</span><span><strong>{item.name}</strong><small>{item.email} · {item.role === "agent" ? "Read-only agent" : item.role === "owner" ? "Owner" : "Household member"}</small></span>{item.role !== "owner" && item.status !== "revoked" && <button className="member-action" aria-label={`Revoke ${item.name}`} data-testid={`revoke-member-${item.id}`} onClick={() => revokeMember(item.id)}><UserX size={15} /></button>}{item.status === "revoked" && <em>Revoked</em>}</div>)}{members.invites.map(item => <div className="member-row pending" key={item.id} data-testid={`invite-row-${item.id}`}><span className="avatar avatar-small">?</span><span><strong>{item.email}</strong><small>Pending · {item.role === "agent" ? "Read-only agent" : "Household member"}</small></span><button className="member-action" aria-label="Revoke invitation" data-testid={`revoke-invite-${item.id}`} onClick={() => revokeInvite(item.id)}><X size={15} /></button></div>)}</div><div className="activity-header"><span><History size={15} /> Recent access activity</span><small>{activity.length} events</small></div><div className="activity-list" data-testid="activity-list">{activity.slice(0, 5).map(event => <div className="activity-row" key={event.id}><span className="activity-dot" /><span><strong>{event.actor_name}</strong> {event.detail}<small>{new Date(event.created_at).toLocaleString()}</small></span></div>)}</div></div></div>}
-    {showNew && <div className="modal-backdrop" data-testid="new-claim-modal"><div className="modal"><button className="close-button" aria-label="Close" data-testid="close-new-claim-button" onClick={() => { setShowNew(false); setNewClaimPolicyId(""); }}><X size={18} /></button><p className="eyebrow">START A CLAIM</p><h2>What happened?</h2><p className="modal-copy">Choose a claim type to begin building your file.</p>{data.policies?.length > 0 && <label style={{ display: "block", marginBottom: 16, fontSize: 11, fontWeight: 600 }}>Which policy is this for? (optional)<select value={newClaimPolicyId} onChange={(e) => setNewClaimPolicyId(e.target.value)} data-testid="new-claim-policy-select" style={{ display: "block", width: "100%", marginTop: 6, padding: 10, borderRadius: 6, border: "1px solid var(--line)", fontSize: 12 }}><option value="">Not sure yet</option>{data.policies.map((p) => <option key={p.id} value={p.id}>{p.insurer_name} · {p.policy_type}</option>)}</select></label>}<div className="claim-options"><button data-testid="cashless-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New hospitalisation claim", claim_type: "Cashless", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Cashless claim saved"); } catch (err) { notify(apiError(err), true); } }}><Stethoscope size={20} /><strong>Cashless hospitalisation</strong><small>The hospital bills your insurer directly - you don't pay the covered amount upfront</small></button><button data-testid="reimbursement-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New reimbursement claim", claim_type: "Reimbursement", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Reimbursement claim saved"); } catch (err) { notify(apiError(err), true); } }}><ClipboardCheck size={20} /><strong>Reimbursement</strong><small>You pay the hospital yourself first, then claim the money back from your insurer</small></button></div></div></div>}
-    {toast && (
-      <div className={toast.isError ? "toast toast-error" : "toast"} role="status" data-testid="toast-message">
-        {toast.isError ? <AlertTriangle size={16} /> : <Check size={16} />}
-        {toast.message}
-      </div>
-    )}
-    {openClaimId && <ClaimDetail claimId={openClaimId} canEdit={canEdit} onClose={() => window.history.back()} onChange={refreshDashboard} notify={notify} />}
-
-    {adminStatsOpen && (
-      <div className="modal-backdrop" data-testid="admin-stats-modal">
-        <div className="modal">
-          <button className="close-button" aria-label="Close" data-testid="close-admin-stats-button" onClick={() => setAdminStatsOpen(false)}><X size={18} /></button>
+    {active === "admin" && (
+      <div className="page-section" data-testid="admin-page">
           <p className="eyebrow">ADMIN · PLATFORM-WIDE</p>
           <h2>Usage stats</h2>
           {!adminStats ? (
@@ -1225,9 +1208,21 @@ function App() {
               </div>
             </>
           )}
-        </div>
       </div>
     )}
+      </div>
+    </main>
+    {showMembers && <div className="modal-backdrop" data-testid="members-modal"><div className="modal members-modal"><button className="close-button" aria-label="Close household access" data-testid="close-members-modal-button" onClick={() => setShowMembers(false)}><X size={18} /></button><p className="eyebrow">MEMBERS</p><h2>People in your household</h2><p className="modal-copy">Invite people to help prepare the file. Agents can view but cannot change claims.</p><form className="invite-form" onSubmit={inviteMember} data-testid="invite-member-form"><input required type="email" placeholder="person@example.com" value={inviteForm.email} onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })} data-testid="invite-email-input" /><select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} data-testid="invite-role-select"><option value="member">Household member</option><option value="agent">Read-only agent</option></select><button className="primary-button" data-testid="send-invite-button"><UserPlus size={16} /> Invite</button></form><div className="member-list" data-testid="member-list">{members.members.map(item => <div className={`member-row ${item.status === "revoked" ? "revoked" : ""}`} key={item.id} data-testid={`member-row-${item.id}`}><span className="avatar avatar-small">{item.name.slice(0, 2).toUpperCase()}</span><span><strong>{item.name}</strong><small>{item.email} · {item.role === "agent" ? "Read-only agent" : item.role === "owner" ? "Owner" : "Household member"}</small></span>{item.role !== "owner" && item.status !== "revoked" && <button className="member-action" aria-label={`Revoke ${item.name}`} data-testid={`revoke-member-${item.id}`} onClick={() => revokeMember(item.id)}><UserX size={15} /></button>}{item.status === "revoked" && <em>Revoked</em>}</div>)}{members.invites.map(item => <div className="member-row pending" key={item.id} data-testid={`invite-row-${item.id}`}><span className="avatar avatar-small">?</span><span><strong>{item.email}</strong><small>Pending · {item.role === "agent" ? "Read-only agent" : "Household member"}</small></span><button className="member-action" aria-label="Revoke invitation" data-testid={`revoke-invite-${item.id}`} onClick={() => revokeInvite(item.id)}><X size={15} /></button></div>)}</div><div className="activity-header"><span><History size={15} /> Recent access activity</span><small>{activity.length} events</small></div><div className="activity-list" data-testid="activity-list">{activity.slice(0, 5).map(event => <div className="activity-row" key={event.id}><span className="activity-dot" /><span><strong>{event.actor_name}</strong> {event.detail}<small>{new Date(event.created_at).toLocaleString()}</small></span></div>)}</div></div></div>}
+    {showNew && <div className="modal-backdrop" data-testid="new-claim-modal"><div className="modal"><button className="close-button" aria-label="Close" data-testid="close-new-claim-button" onClick={() => { setShowNew(false); setNewClaimPolicyId(""); }}><X size={18} /></button><p className="eyebrow">START A CLAIM</p><h2>What happened?</h2><p className="modal-copy">Choose a claim type to begin building your file.</p>{data.policies?.length > 0 && <label style={{ display: "block", marginBottom: 16, fontSize: 11, fontWeight: 600 }}>Which policy is this for? (optional)<select value={newClaimPolicyId} onChange={(e) => setNewClaimPolicyId(e.target.value)} data-testid="new-claim-policy-select" style={{ display: "block", width: "100%", marginTop: 6, padding: 10, borderRadius: 6, border: "1px solid var(--line)", fontSize: 12 }}><option value="">Not sure yet</option>{data.policies.map((p) => <option key={p.id} value={p.id}>{p.insurer_name} · {p.policy_type}</option>)}</select></label>}<div className="claim-options"><button data-testid="cashless-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New hospitalisation claim", claim_type: "Cashless", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Cashless claim saved"); } catch (err) { notify(apiError(err), true); } }}><Stethoscope size={20} /><strong>Cashless hospitalisation</strong><small>The hospital bills your insurer directly - you don't pay the covered amount upfront</small></button><button data-testid="reimbursement-claim-option" onClick={async () => { try { const response = await client.post(`/claims`, { title: "New reimbursement claim", claim_type: "Reimbursement", policy_id: newClaimPolicyId || null }); setData({ ...data, claims: [response.data, ...data.claims] }); setShowNew(false); setNewClaimPolicyId(""); openClaim(response.data.id); notify("Reimbursement claim saved"); } catch (err) { notify(apiError(err), true); } }}><ClipboardCheck size={20} /><strong>Reimbursement</strong><small>You pay the hospital yourself first, then claim the money back from your insurer</small></button></div></div></div>}
+    {toast && (
+      <div className={toast.isError ? "toast toast-error" : "toast"} role="status" data-testid="toast-message">
+        {toast.isError ? <AlertTriangle size={16} /> : <Check size={16} />}
+        {toast.message}
+      </div>
+    )}
+    {openClaimId && <ClaimDetail claimId={openClaimId} canEdit={canEdit} onClose={() => window.history.back()} onChange={refreshDashboard} notify={notify} />}
+
+
   </div>;
 }
 export default App;
