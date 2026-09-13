@@ -81,3 +81,19 @@ def test_download_rejects_bad_disposition(registered_user):
     doc_id = r.json()["id"]
     r = client.get(f"/api/documents/{doc_id}/download", params={"disposition": "bogus"})
     assert r.status_code == 400
+def test_scan_discharge_summary_returns_501_without_gemini(registered_user):
+    client, user = registered_user
+    r = client.post("/api/tools/scan-discharge-summary", files={"file": ("discharge.pdf", b"%PDF-1.4 fake", "application/pdf")})
+    assert r.status_code == 501
+
+def test_scan_discharge_summary_rejects_bad_file_type(registered_user):
+    client, user = registered_user
+    r = client.post("/api/tools/scan-discharge-summary", files={"file": ("doc.docx", b"fake", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    assert r.status_code == 415
+
+def test_scan_discharge_summary_requires_auth():
+    from fastapi.testclient import TestClient
+    import server as srv
+    anon_client = TestClient(srv.app)
+    r = anon_client.post("/api/tools/scan-discharge-summary", files={"file": ("d.pdf", b"%PDF-1.4", "application/pdf")})
+    assert r.status_code == 401

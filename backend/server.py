@@ -1193,6 +1193,64 @@ def classify_document_with_gemini(file_bytes: bytes, mime_type: str) -> dict:
     raise AIAnalysisFailed(str(last_exc))
 
 
+class HospitalizationExtraction(BaseModel):
+    patient_name: str | None = None
+    hospital_name: str | None = None
+    admission_date: str | None = Field(default=None, description="YYYY-MM-DD")
+    discharge_date: str | None = Field(default=None, description="YYYY-MM-DD")
+    diagnosis: str | None = None
+    patient_gender: str | None = Field(default=None, description="Exactly 'Male' or 'Female' if stated, otherwise null")
+    room_category: str | None = None
+    date_of_onset: str | None = Field(default=None, description="Date the injury/disease was first noticed or occurred, YYYY-MM-DD, if stated")
+    admission_time: str | None = Field(default=None, description="24-hour HH:MM if stated")
+    discharge_time: str | None = Field(default=None, description="24-hour HH:MM if stated")
+    system_of_medicine: str | None = Field(default=None, description="e.g. Allopathy, Ayurveda - only if explicitly stated")
+
+
+DISCHARGE_SUMMARY_EXTRACT_PROMPT = """You are reading a hospital discharge summary to help pre-fill a claim form.
+
+Extract ONLY what this exact document states. Never invent, estimate, or guess a name, date, or detail
+that isn't written here - leave a field null rather than guessing. Dates must be in YYYY-MM-DD format;
+if the document uses a different format (e.g. DD/MM/YYYY), convert it, but only if you're confident of
+the conversion - otherwise leave it null. Times must be 24-hour HH:MM."""
+
+
+def extract_hospitalization_with_gemini(file_bytes: bytes, mime_type: str) -> dict:
+    if not GEMINI_API_KEY:
+        raise AIAnalysisUnavailable("AI analysis is not configured on this server")
+
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=45_000))
+    max_attempts = 2
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type), DISCHARGE_SUMMARY_EXTRACT_PROMPT],
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=HospitalizationExtraction,
+                    temperature=0.1,
+                ),
+            )
+            parsed = HospitalizationExtraction.model_validate_json(response.text)
+            result = parsed.model_dump()
+            if result.get("patient_gender") not in ("Male", "Female"):
+                result["patient_gender"] = None
+            return result
+        except genai_errors.ServerError as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            raise AIAnalysisFailed("Gemini didn't respond in time") from exc
+        except Exception as exc:
+            raise AIAnalysisFailed(str(exc)) from exc
+
+    raise AIAnalysisFailed(str(last_exc))
+
+
 # Keyword categories checked in order - first match wins. Deliberately checks
 # more specific/distinctive phrases (e.g. "discharge summary") before generic
 # ones, so a document doesn't get miscategorized by a coincidental word match.
@@ -2356,6 +2414,34 @@ async def classify_document(file: UploadFile = File(...), user: dict = Depends(c
 
     fallback_result = classify_document_fallback(ocr_result["text"])
     return {**fallback_result, "method": "keyword_match"}
+
+
+@api_router.post("/tools/scan-discharge-summary")
+async def scan_discharge_summary(file: UploadFile = File(...), user: dict = Depends(current_user)):
+    """Reads an uploaded discharge summary and suggests values for the
+    Hospitalization Details form - patient name, hospital, dates, diagnosis,
+    and a few Section D specifics if stated. Nothing is saved here; this only
+    returns suggestions for the person to review before saving the form,
+    same as the document category classifier."""
+    if file.content_type not in OCR_SUPPORTED_TYPES:
+        raise HTTPException(status_code=415, detail="Upload a PDF or a JPG/PNG/WEBP/HEIC image")
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File is too large. Maximum size is {MAX_UPLOAD_BYTES // (1024*1024)}MB")
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=501, detail="This needs AI analysis, which isn't configured on this server yet")
+
+    mime_type = "application/pdf" if file.content_type == "application/pdf" else file.content_type
+    try:
+        result = await asyncio.to_thread(extract_hospitalization_with_gemini, contents, mime_type)
+    except AIAnalysisUnavailable as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    except AIAnalysisFailed as exc:
+        logger.error("Discharge summary extraction failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Couldn't read that document - try again or fill the form in yourself") from exc
+    return result
 
 
 @api_router.post("/documents/{document_id}/ocr")

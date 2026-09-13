@@ -88,11 +88,24 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
   const [claimFormUploadResult, setClaimFormUploadResult] = useState(null);
   const [analyzingClaimForm, setAnalyzingClaimForm] = useState(false);
   const claimFormFileInputRef = useRef(null);
+  const [linkedPolicyPeople, setLinkedPolicyPeople] = useState([]);
+  const [selectedPersonName, setSelectedPersonName] = useState("");
+  const [scanningDischarge, setScanningDischarge] = useState(false);
+  const [dischargeScanApplied, setDischargeScanApplied] = useState(false);
+  const dischargeFileInputRef = useRef(null);
 
   const load = async () => {
     try {
       const res = await client.get(`/claims/${claimId}`);
       setClaim(res.data);
+      if (res.data.policy_id) {
+        try {
+          const policyRes = await client.get(`/policies/${res.data.policy_id}`);
+          setLinkedPolicyPeople(policyRes.data.insured_people || []);
+        } catch { setLinkedPolicyPeople([]); }
+      } else {
+        setLinkedPolicyPeople([]);
+      }
       setHospForm({
         patient_name: res.data.patient_name || "", hospital_name: res.data.hospital_name || "",
         admission_date: res.data.admission_date || "", discharge_date: res.data.discharge_date || "",
@@ -183,6 +196,41 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
       notify("Hospitalization details saved");
       await refresh();
     } catch (err) { notify(apiError(err), true); } finally { setSavingHosp(false); }
+  };
+
+  const selectInsuredPerson = (name) => {
+    setSelectedPersonName(name);
+    const person = linkedPolicyPeople.find((p) => p.name === name);
+    if (!person) return;
+    setHospForm((prev) => ({ ...prev, patient_name: person.name, patient_relationship: person.relation || prev.patient_relationship, patient_dob: person.dob || prev.patient_dob }));
+  };
+
+  const scanDischargeSummary = async (file) => {
+    if (!file) return;
+    setScanningDischarge(true);
+    setDischargeScanApplied(false);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await client.post("/tools/scan-discharge-summary", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 });
+      const d = res.data;
+      setHospForm((prev) => ({
+        ...prev,
+        patient_name: d.patient_name || prev.patient_name,
+        hospital_name: d.hospital_name || prev.hospital_name,
+        admission_date: d.admission_date || prev.admission_date,
+        discharge_date: d.discharge_date || prev.discharge_date,
+        diagnosis: d.diagnosis || prev.diagnosis,
+        patient_gender: d.patient_gender || prev.patient_gender,
+        room_category: d.room_category || prev.room_category,
+        date_of_onset: d.date_of_onset || prev.date_of_onset,
+        admission_time: d.admission_time || prev.admission_time,
+        discharge_time: d.discharge_time || prev.discharge_time,
+        system_of_medicine: d.system_of_medicine || prev.system_of_medicine,
+      }));
+      setDischargeScanApplied(true);
+      notify("Filled in what we found - please check it over before saving");
+    } catch (err) { notify(apiError(err), true); } finally { setScanningDischarge(false); }
   };
 
   const submitNote = (e) => {
@@ -402,6 +450,38 @@ export default function ClaimDetail({ claimId, canEdit, onClose, onChange, notif
                   <h3>Hospitalization details</h3>
                   <p>The core facts every insurer's form asks for - fill in what you know, the rest can wait.</p>
                 </div>
+
+                {canEdit && linkedPolicyPeople.length > 0 && (
+                  <label style={{ marginBottom: 14, display: "block" }}>
+                    Who is this claim for?
+                    <select value={selectedPersonName} onChange={(e) => selectInsuredPerson(e.target.value)} data-testid="hosp-insured-person-select">
+                      <option value="">Choose from this policy's covered people…</option>
+                      {linkedPolicyPeople.map((p) => <option key={p.name} value={p.name}>{p.name}{p.relation ? ` (${p.relation})` : ""}</option>)}
+                    </select>
+                  </label>
+                )}
+
+                {canEdit && (
+                  <div style={{ marginBottom: 16 }}>
+                    <input
+                      ref={dischargeFileInputRef} type="file" hidden accept=".pdf,.jpg,.jpeg,.png,.webp,.heic"
+                      onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) scanDischargeSummary(f); }}
+                      data-testid="discharge-summary-file-input"
+                    />
+                    <button
+                      type="button" className="outline-button" disabled={scanningDischarge}
+                      onClick={() => dischargeFileInputRef.current?.click()}
+                      data-testid="scan-discharge-summary-button"
+                    >
+                      <Upload size={14} /> {scanningDischarge ? "Reading document…" : "Fill in from discharge summary"}
+                    </button>
+                    <p className="readonly-hint" style={{ margin: "6px 0 0" }}>Upload the discharge summary and we'll fill in what we can find below - review it before saving.</p>
+                    {dischargeScanApplied && !scanningDischarge && (
+                      <p style={{ fontSize: 11, color: "var(--teal)", margin: "4px 0 0" }} data-testid="discharge-scan-applied-note">Filled in below - please check it over before saving.</p>
+                    )}
+                  </div>
+                )}
+
               <form
                 className="stack-form"
                 style={{ marginBottom: 0, paddingBottom: 0, border: 0 }}
