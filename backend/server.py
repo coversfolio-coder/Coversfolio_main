@@ -4024,37 +4024,31 @@ def build_agent_reference_context(regulatory_facts: dict) -> str:
 def ask_agent_with_gemini(message: str, history: list[dict], household_context: str, reference_context: str) -> str:
     if not GEMINI_API_KEY:
         raise AIAnalysisUnavailable("The assistant isn't configured on this server yet")
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=30_000))
+    # Kept comfortably below typical gateway/proxy timeouts (commonly ~60s) -
+    # if Gemini itself is slow, this fails fast with a clean error Cova can
+    # show, rather than the connection hanging until an upstream gateway
+    # kills it with a bare, unhelpful 504.
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=20_000))
     system_prompt = AGENT_SYSTEM_PROMPT.format(household_context=household_context, reference_context=reference_context)
     contents = []
     for turn in history:
         contents.append(genai_types.Content(role="user" if turn["role"] == "user" else "model", parts=[genai_types.Part.from_text(text=turn["content"])]))
     contents.append(genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=message)]))
     try:
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL, contents=contents,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048,
-                    # Flash-family models spend part of the *same* output-token
-                    # budget on internal reasoning before the visible answer -
-                    # with a low budget, that reasoning could eat the whole
-                    # response, cutting it off right as it starts (exactly what
-                    # happened here). A simple Q&A assistant doesn't need deep
-                    # reasoning, so this keeps thinking minimal and leaves the
-                    # token budget for the actual answer instead.
-                    thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
-                ),
-            )
-        except genai_errors.ClientError:
-            # Some models reject thinking_budget=0 outright (a few require a
-            # minimum non-zero budget) - the raised max_output_tokens alone
-            # still substantially fixes the cutoff, so retry without the
-            # thinking override rather than failing the whole request.
-            response = client.models.generate_content(
-                model=GEMINI_MODEL, contents=contents,
-                config=genai_types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048),
-            )
+        response = client.models.generate_content(
+            model=GEMINI_MODEL, contents=contents,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048,
+                # A small, non-zero thinking budget (rather than exactly 0) is
+                # far more broadly accepted across model variants - some
+                # models reject 0 outright, which previously meant falling
+                # back to a second call with NO thinking limit at all: a
+                # second, potentially slow request stacked on top of the
+                # first failed one. A single bounded call is both simpler and
+                # has a much lower worst-case latency.
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=100),
+            ),
+        )
         return response.text
     except Exception as exc:
         raise AIAnalysisFailed(str(exc)) from exc

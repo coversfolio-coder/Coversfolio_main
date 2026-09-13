@@ -568,12 +568,14 @@ function AgentWidget({ notify }) {
     setInput("");
     setSending(true);
     try {
-      const res = await client.post("/agent/ask", { message: text, history });
+      const res = await client.post("/agent/ask", { message: text, history }, { timeout: 25000 });
       setMessages((prev) => [...prev, { role: "assistant", content: res.data.answer }]);
     } catch (err) {
-      const message = err?.response?.status === 501
-        ? "The assistant isn't set up on this server yet."
-        : "Sorry, I couldn't get a response - try again.";
+      const message = err?.code === "ECONNABORTED"
+        ? "That took too long to answer - try a shorter question, or try again."
+        : err?.response?.status === 501
+          ? "The assistant isn't set up on this server yet."
+          : "Sorry, I couldn't get a response - try again.";
       setMessages((prev) => [...prev, { role: "assistant", content: message }]);
     } finally { setSending(false); }
   };
