@@ -274,6 +274,14 @@ function LandingPage({ onGetStarted, onLogin }) {
         </div>
       </section>
 
+      <section className="landing-cta" style={{ paddingBottom: 8 }}>
+        <p className="landing-section-label">FREE TOOLS - NO SIGN-UP NEEDED</p>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center", marginTop: 18 }}>
+          <a href="/guides/waiting-period-calculator.html" className="btn" style={{ textDecoration: "none" }} data-testid="link-waiting-period-tool">Waiting period calculator</a>
+          <a href="/guides/claim-documents-checklist.html" className="btn" style={{ textDecoration: "none" }} data-testid="link-checklist-tool">Claim documents checklist</a>
+        </div>
+      </section>
+
       <section className="landing-cta">
         <h2>Ready to get your paperwork right the first time?</h2>
         <button className="btn primary large" onClick={onGetStarted} data-testid="landing-footer-cta">Get started free</button>
@@ -281,6 +289,9 @@ function LandingPage({ onGetStarted, onLogin }) {
 
       <footer className="landing-footer">
         <span>Sources: IRDAI Annual Report (via Business Standard); industry claim-rejection analyses, 2025-26.</span>
+        <span style={{ display: "block", marginTop: 8 }}>
+          <a href="/guides/waiting-period-calculator.html">Waiting period calculator</a> · <a href="/guides/claim-documents-checklist.html">Claim documents checklist</a>
+        </span>
       </footer>
     </div>
   );

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Health Insurance Waiting Period Calculator (Free) - Coversfolio</title>
+<meta name="description" content="Free calculator to check when your health insurance waiting period ends - initial waiting period, pre-existing disease waiting period, or a specific illness waiting period. No sign-up needed.">
+<link rel="canonical" href="https://coversfolio.com/guides/waiting-period-calculator.html">
+<meta property="og:title" content="Health Insurance Waiting Period Calculator (Free) - Coversfolio">
+<meta property="og:description" content="Enter your policy's start date and waiting period length to see exactly when a condition becomes claimable.">
+<meta property="og:type" content="website">
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/guides/guides.css">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {"@type": "Question", "name": "What is a health insurance waiting period?",
+     "acceptedAnswer": {"@type": "Answer", "text": "A waiting period is the time you must hold a health insurance policy before a specific type of claim becomes payable. Common types include the initial waiting period (usually 30 days, covering everything except accidents), the pre-existing disease waiting period (commonly 2-4 years), and specific illness/procedure waiting periods (commonly 1-2 years for named conditions like cataract or hernia)."}},
+    {"@type": "Question", "name": "Does renewing my policy reset the waiting period?",
+     "acceptedAnswer": {"@type": "Answer", "text": "No - if your policy has been renewed continuously without a break, the waiting period is measured from when you first took continuous coverage, not from your most recent renewal date. A renewal should not reset a waiting period you've already served."}}
+  ]
+}
+</script>
+</head>
+<body>
+
+<div class="g-topbar">
+  <img src="/brand-icon.png" alt="Coversfolio">
+  <span>Coversfolio</span>
+</div>
+
+<div class="g-wrap">
+  <p class="g-eyebrow">FREE TOOL - NO SIGN-UP NEEDED</p>
+  <h1>Health Insurance Waiting Period Calculator</h1>
+  <p class="g-lede">Figure out exactly when a health insurance waiting period ends - enter your policy's coverage start date and the waiting period length, and see the date and days remaining.</p>
+
+  <div class="g-card">
+    <label class="g-label">When did your continuous coverage begin?
+      <input type="date" id="startDate" class="g-input">
+    </label>
+    <p style="font-size:11.5px;margin:-8px 0 16px;color:var(--faint)">If your policy has been renewed continuously, use the date you first took it - not your most recent renewal date. Renewing doesn't reset a waiting period you've already served.</p>
+
+    <label class="g-label">Waiting period type
+      <select id="waitingType" class="g-input">
+        <option value="30" data-unit="days">Initial waiting period - 30 days (most common)</option>
+        <option value="24" data-unit="months">Pre-existing disease - 24 months</option>
+        <option value="36" data-unit="months">Pre-existing disease - 36 months</option>
+        <option value="48" data-unit="months">Pre-existing disease - 48 months</option>
+        <option value="12" data-unit="months">Specific illness/procedure - 12 months</option>
+        <option value="24-specific" data-unit="months">Specific illness/procedure - 24 months</option>
+        <option value="custom" data-unit="months">Custom - enter months below</option>
+      </select>
+    </label>
+    <label class="g-label" id="customWrap" style="display:none">Custom waiting period (months)
+      <input type="number" id="customMonths" class="g-input" min="1" placeholder="e.g. 18">
+    </label>
+
+    <button class="g-btn" onclick="calculate()">Calculate</button>
+
+    <div id="result" class="g-result">
+      <h3 id="resultTitle"></h3>
+      <p id="resultText" style="margin:0"></p>
+    </div>
+  </div>
+
+  <div class="g-cta">
+    <p>This checks one waiting period at a time. Coversfolio tracks every waiting period across all your policies automatically, and flags it the moment a condition becomes claimable.</p>
+    <a href="/">Track this for free - sign up</a>
+  </div>
+
+  <h2>The three types of waiting periods, explained</h2>
+  <div class="g-fact">
+    <strong>Initial waiting period - usually 30 days</strong>
+    <span>Covers almost everything except accidental injuries, which are payable from day one. This is the shortest, most universal waiting period and applies to nearly all new health policies in India.</span>
+  </div>
+  <div class="g-fact">
+    <strong>Pre-existing disease (PED) waiting period - commonly 2 to 4 years</strong>
+    <span>Applies to any condition you already had before buying the policy - diabetes, hypertension, thyroid conditions, and similar. This is measured from when your continuous coverage began, not each renewal.</span>
+  </div>
+  <div class="g-fact">
+    <strong>Specific illness/procedure waiting period - commonly 1 to 2 years</strong>
+    <span>Applies to a named list of conditions and procedures - cataract, hernia, joint replacement, and similar - regardless of whether you had them before buying the policy.</span>
+  </div>
+
+  <h2>A few things worth knowing</h2>
+  <p><strong>Check your own policy document for the exact numbers.</strong> This calculator uses common industry figures, but your specific policy could differ - the wording in your own policy document (or Customer Information Sheet) is the final word.</p>
+  <p><strong>Accidental injuries have no waiting period</strong> under IRDAI rules, regardless of when the policy was bought.</p>
+  <p><strong>Renewing your policy does not reset a waiting period</strong> that's already been served, as long as coverage has been continuous without a break.</p>
+
+  <div class="g-footer">
+    <a href="/">Coversfolio</a> - organize your insurance policies and compile everything needed for a claim, all in one place.
+  </div>
+</div>
+
+<script>
+document.getElementById('waitingType').addEventListener('change', function() {
+  document.getElementById('customWrap').style.display = this.value === 'custom' ? 'block' : 'none';
+});
+
+function calculate() {
+  var startVal = document.getElementById('startDate').value;
+  var result = document.getElementById('result');
+  var titleEl = document.getElementById('resultTitle');
+  var textEl = document.getElementById('resultText');
+
+  if (!startVal) {
+    result.className = 'g-result g-result-wait';
+    titleEl.textContent = 'Enter a start date first';
+    textEl.textContent = 'Pick the date your continuous coverage began, then choose a waiting period type.';
+    return;
+  }
+
+  var select = document.getElementById('waitingType');
+  var opt = select.options[select.selectedIndex];
+  var unit = opt.getAttribute('data-unit');
+  var value = select.value === 'custom'
+    ? parseInt(document.getElementById('customMonths').value || '0', 10)
+    : parseInt(select.value, 10);
+
+  if (!value || value <= 0) {
+    result.className = 'g-result g-result-wait';
+    titleEl.textContent = 'Enter a valid waiting period';
+    textEl.textContent = 'Pick a waiting period type, or enter a custom number of months.';
+    return;
+  }
+
+  var start = new Date(startVal + 'T00:00:00');
+  var end = new Date(start);
+  if (unit === 'days') {
+    end.setDate(end.getDate() + value);
+  } else {
+    end.setMonth(end.getMonth() + value);
+  }
+
+  var today = new Date();
+  today.setHours(0, 0, 0, 0);
+  var msPerDay = 1000 * 60 * 60 * 24;
+  var daysRemaining = Math.ceil((end - today) / msPerDay);
+
+  var endStr = end.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  if (daysRemaining <= 0) {
+    result.className = 'g-result g-result-ok';
+    titleEl.textContent = 'This waiting period has passed';
+    textEl.textContent = 'It ended on ' + endStr + '. Always double-check the exact clause in your own policy document before relying on this for a real claim.';
+  } else {
+    result.className = 'g-result g-result-wait';
+    titleEl.textContent = daysRemaining + ' day' + (daysRemaining === 1 ? '' : 's') + ' remaining';
+    textEl.textContent = 'This waiting period ends on ' + endStr + '. Always double-check the exact clause in your own policy document before relying on this for a real claim.';
+  }
+}
+</script>
+
+</body>
+</html>
