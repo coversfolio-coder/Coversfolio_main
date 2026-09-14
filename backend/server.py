@@ -1023,7 +1023,7 @@ def analyze_policy_with_gemini(pdf_bytes: bytes) -> dict:
     # actually went wrong. Failing fast here, comfortably under the platform's
     # timeout, means a real error (see below) reaches the person instead of a
     # bare 504.
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=45_000))
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=25_000))
     # Gemini occasionally returns a 503 "currently experiencing high demand -
     # please try again later" - that's Google's own servers being temporarily
     # overloaded, not something wrong with the request, so it's worth a couple
@@ -1056,10 +1056,10 @@ def analyze_policy_with_gemini(pdf_bytes: bytes) -> dict:
             last_exc = exc
             if attempt < max_attempts - 1:
                 logger.warning("Gemini server error (attempt %d/%d), retrying: %s", attempt + 1, max_attempts, exc)
-                time.sleep(2 * (attempt + 1))
+                time.sleep(1)
                 continue
         except (httpx.TimeoutException, TimeoutError) as exc:
-            logger.error("Gemini request timed out after 45s: %s", exc)
+            logger.error("Gemini request timed out after 25s: %s", exc)
             raise AIAnalysisFailed("Gemini didn't respond in time - this can happen with a large or complex document. Try again, or use the standard scan instead.") from exc
         except Exception as exc:
             raise AIAnalysisFailed(str(exc)) from exc
@@ -1090,7 +1090,7 @@ def analyze_claim_form_with_gemini(file_bytes: bytes, mime_type: str, known_data
     if not GEMINI_API_KEY:
         raise AIAnalysisUnavailable("AI analysis is not configured on this server")
 
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=45_000))
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=25_000))
     max_attempts = 2
     last_exc = None
     for attempt in range(max_attempts):
@@ -1114,10 +1114,10 @@ def analyze_claim_form_with_gemini(file_bytes: bytes, mime_type: str, known_data
             last_exc = exc
             if attempt < max_attempts - 1:
                 logger.warning("Gemini server error (attempt %d/%d), retrying: %s", attempt + 1, max_attempts, exc)
-                time.sleep(2 * (attempt + 1))
+                time.sleep(1)
                 continue
         except (httpx.TimeoutException, TimeoutError) as exc:
-            logger.error("Gemini claim-form analysis timed out after 45s: %s", exc)
+            logger.error("Gemini claim-form analysis timed out after 25s: %s", exc)
             raise AIAnalysisFailed("Gemini didn't respond in time - this can happen with a large or complex document. Try again.") from exc
         except Exception as exc:
             raise AIAnalysisFailed(str(exc)) from exc
@@ -1161,7 +1161,7 @@ def classify_document_with_gemini(file_bytes: bytes, mime_type: str) -> dict:
     if not GEMINI_API_KEY:
         raise AIAnalysisUnavailable("AI analysis is not configured on this server")
 
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=45_000))
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=25_000))
     max_attempts = 2
     last_exc = None
     for attempt in range(max_attempts):
@@ -1183,7 +1183,7 @@ def classify_document_with_gemini(file_bytes: bytes, mime_type: str) -> dict:
         except genai_errors.ServerError as exc:
             last_exc = exc
             if attempt < max_attempts - 1:
-                time.sleep(2 * (attempt + 1))
+                time.sleep(1)
                 continue
         except (httpx.TimeoutException, TimeoutError) as exc:
             raise AIAnalysisFailed("Gemini didn't respond in time") from exc
@@ -1219,7 +1219,7 @@ def extract_hospitalization_with_gemini(file_bytes: bytes, mime_type: str) -> di
     if not GEMINI_API_KEY:
         raise AIAnalysisUnavailable("AI analysis is not configured on this server")
 
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=45_000))
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=25_000))
     max_attempts = 2
     last_exc = None
     for attempt in range(max_attempts):
@@ -1241,7 +1241,7 @@ def extract_hospitalization_with_gemini(file_bytes: bytes, mime_type: str) -> di
         except genai_errors.ServerError as exc:
             last_exc = exc
             if attempt < max_attempts - 1:
-                time.sleep(2 * (attempt + 1))
+                time.sleep(1)
                 continue
         except (httpx.TimeoutException, TimeoutError) as exc:
             raise AIAnalysisFailed("Gemini didn't respond in time") from exc
@@ -1336,7 +1336,12 @@ def check_regulatory_facts_with_gemini(facts: list[dict]) -> dict:
     if not GEMINI_API_KEY:
         raise AIAnalysisUnavailable("AI analysis is not configured on this server")
 
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=60_000))
+    # Two sequential calls happen here (search, then reshape) - each needs its
+    # own conservative timeout so their combined worst-case still lands safely
+    # under the platform's gateway timeout, rather than the two 60s budgets
+    # this previously had, which could combine to 120s and produce a bare 504
+    # with no information about what actually happened.
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=25_000))
     prompt = REGULATORY_CHECK_PROMPT.format(facts_json=json.dumps(facts, indent=2))
     try:
         response = client.models.generate_content(
@@ -1349,8 +1354,10 @@ def check_regulatory_facts_with_gemini(facts: list[dict]) -> dict:
         )
         # Grounded generation can't also request structured JSON output in one
         # call, so ask a second, ungrounded pass to shape the grounded
-        # findings into the exact schema needed.
-        shape_response = client.models.generate_content(
+        # findings into the exact schema needed. This second call does no
+        # search of its own, so it should be quick - a shorter timeout here.
+        reshape_client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=15_000))
+        shape_response = reshape_client.models.generate_content(
             model=GEMINI_MODEL,
             contents=[
                 "Convert the following research findings into the exact structured format requested. Do not add new information - only reshape what's given.\n\n" + response.text,
