@@ -149,7 +149,14 @@ def test_gemini_transient_error_retries_then_recovers(registered_user, monkeypat
         MockClient.return_value = mock_instance
         resp = client.post("/api/policies/extract-ai", files={"file": ("p.pdf", b"%PDF-1.4 x", "application/pdf")})
         assert resp.status_code == 200
+        job_id = resp.json()["job_id"]
         assert call_count["n"] == 2
+
+        job_resp = client.get(f"/api/ai-jobs/{job_id}")
+        job_data = job_resp.json()
+        assert job_data["status"] == "done"
+        assert job_data["result"]["insurer_name"] == "Star Health"
+        assert job_data["result"]["source"] == "ai"
 
 
 def test_gemini_quota_error_does_not_retry(registered_user, monkeypatch):
@@ -169,5 +176,17 @@ def test_gemini_quota_error_does_not_retry(registered_user, monkeypatch):
         mock_instance.models.generate_content.side_effect = side_effect
         MockClient.return_value = mock_instance
         resp = client.post("/api/policies/extract-ai", files={"file": ("p.pdf", b"%PDF-1.4 x", "application/pdf")})
-        assert resp.status_code == 429
+        # The endpoint now returns immediately with a job to poll, rather than
+        # blocking on the Gemini call itself - the actual quota error only
+        # shows up once the (TestClient-synchronous) background task finishes
+        # and the job is polled.
+        assert resp.status_code == 200, resp.text
+        job_id = resp.json()["job_id"]
         assert call_count["n"] == 1
+
+        job_resp = client.get(f"/api/ai-jobs/{job_id}")
+        assert job_resp.status_code == 200
+        job_data = job_resp.json()
+        assert job_data["status"] == "failed"
+        assert job_data["error_code"] == "quota"
+        assert "20 requests/day" in job_data["message"]

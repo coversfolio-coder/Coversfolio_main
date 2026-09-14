@@ -24,7 +24,7 @@ import bcrypt
 import httpx
 import jwt
 from docx import Document as DocxDocument
-from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from google.auth.transport import requests as google_requests
@@ -947,6 +947,45 @@ class AIAnalysisFailed(Exception):
     returned something we couldn't parse."""
 
 
+async def _run_ai_job(job_id: str, func, *args):
+    """Runs a slow, blocking AI function in a worker thread and stores the
+    outcome on the job document - this is what actually solves the gateway
+    504 problem: the HTTP request that created this job already returned
+    immediately, so however long the real Gemini call takes (even minutes),
+    no single request is ever left open waiting for it. The frontend polls
+    the job's status separately instead."""
+    now = lambda: datetime.now(timezone.utc).isoformat()
+    try:
+        result = await asyncio.to_thread(func, *args)
+        await db.ai_jobs.update_one({"id": job_id}, {"$set": {"status": "done", "result": result, "completed_at": now()}})
+    except AIAnalysisUnavailable as exc:
+        await db.ai_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error_code": "unavailable", "error": str(exc), "completed_at": now()}})
+    except AIAnalysisFailed as exc:
+        error_code = "quota" if ("RESOURCE_EXHAUSTED" in str(exc) or "429" in str(exc)) else "failed"
+        logger.error("AI job %s failed (%s): %s", job_id, error_code, exc)
+        await db.ai_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error_code": error_code, "error": str(exc), "completed_at": now()}})
+    except Exception as exc:
+        logger.error("AI job %s failed unexpectedly: %s", job_id, exc)
+        await db.ai_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error_code": "failed", "error": str(exc), "completed_at": now()}})
+
+
+async def _start_ai_job(background_tasks: BackgroundTasks, household_id: str, func, *args) -> str:
+    job_id = str(uuid.uuid4())
+    await db.ai_jobs.insert_one({
+        "id": job_id, "household_id": household_id, "status": "processing",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    background_tasks.add_task(_run_ai_job, job_id, func, *args)
+    return job_id
+
+
+AI_JOB_ERROR_MESSAGES = {
+    "quota": "You've hit Gemini's daily free-tier limit (20 requests/day) - try again tomorrow, or add billing to your Google AI Studio project for a higher limit",
+    "unavailable": "AI analysis is not configured on this server yet",
+    "failed": "AI analysis failed - try the standard scan instead",
+}
+
+
 POLICY_AI_PROMPT = """You are analyzing an Indian insurance policy document for a personal claims-organizing app.
 Extract ONLY what is explicitly stated in this document. Never invent, estimate, or infer a figure,
 date, or term that is not written in the text. If something isn't present, leave that field null or
@@ -1419,6 +1458,23 @@ async def optional_current_user(request: Request) -> dict | None:
         return await current_user(request)
     except HTTPException:
         return None
+
+
+@api_router.get("/ai-jobs/{job_id}")
+async def get_ai_job(job_id: str, user: dict = Depends(current_user)):
+    """Polled by the frontend instead of waiting on one long request. Always
+    returns 200 - the job's own status/result describes success or failure,
+    since the poll request itself succeeded either way."""
+    job = await db.ai_jobs.find_one({"id": job_id, "household_id": user["household_id"]}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] == "done":
+        result = dict(job["result"])
+        result["source"] = "ai"
+        return {"status": "done", "result": result}
+    if job["status"] == "failed":
+        return {"status": "failed", "error_code": job.get("error_code", "failed"), "message": AI_JOB_ERROR_MESSAGES.get(job.get("error_code"), AI_JOB_ERROR_MESSAGES["failed"])}
+    return {"status": "processing"}
 
 
 def set_session(response: Response, user: dict):
@@ -2529,7 +2585,7 @@ async def get_public_config():
 
 
 @api_router.post("/policies/extract-ai")
-async def extract_policy_document_ai(file: UploadFile = File(...), user: dict = Depends(current_user)):
+async def extract_policy_document_ai(background_tasks: BackgroundTasks, file: UploadFile = File(...), user: dict = Depends(current_user)):
     _require_writer(user)
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=415, detail="AI analysis currently supports PDF files only")
@@ -2538,46 +2594,24 @@ async def extract_policy_document_ai(file: UploadFile = File(...), user: dict = 
         raise HTTPException(status_code=413, detail=f"File is too large. Maximum size is {MAX_UPLOAD_BYTES // (1024*1024)}MB")
     if len(contents) == 0:
         raise HTTPException(status_code=400, detail="The uploaded file is empty")
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=501, detail="AI analysis is not configured on this server yet")
 
-    try:
-        # analyze_policy_with_gemini is a blocking, synchronous call (network
-        # I/O plus a blocking time.sleep on retry). Calling it directly here
-        # would freeze this server's entire event loop - meaning every other
-        # user's request (login, dashboard, anything) would stall for as long
-        # as this one Gemini call takes. Running it in a worker thread keeps
-        # the rest of the app responsive while this one request waits.
-        analysis = await asyncio.to_thread(analyze_policy_with_gemini, contents)
-    except AIAnalysisUnavailable as exc:
-        raise HTTPException(status_code=501, detail="AI analysis is not configured on this server yet") from exc
-    except AIAnalysisFailed as exc:
-        logger.error("Gemini policy analysis failed: %s", exc)
-        if "RESOURCE_EXHAUSTED" in str(exc) or "429" in str(exc):
-            raise HTTPException(status_code=429, detail="You've hit Gemini's daily free-tier limit (20 requests/day) - try again tomorrow, or add billing to your Google AI Studio project for a higher limit") from exc
-        raise HTTPException(status_code=502, detail="AI analysis failed - try the standard scan instead") from exc
-
-    await audit(user, "policy_document_ai_analyzed", f"AI-analyzed '{file.filename}' for policy details")
-    analysis["source"] = "ai"
-    return analysis
+    job_id = await _start_ai_job(background_tasks, user["household_id"], analyze_policy_with_gemini, contents)
+    await audit(user, "policy_document_ai_analyzed", f"Started AI analysis for '{file.filename}'")
+    return {"job_id": job_id, "status": "processing"}
 
 
 @api_router.post("/policies/extract-ai-from-document/{document_id}")
-async def extract_policy_document_ai_from_existing(document_id: str, user: dict = Depends(current_user)):
+async def extract_policy_document_ai_from_existing(document_id: str, background_tasks: BackgroundTasks, user: dict = Depends(current_user)):
     _require_writer(user)
     contents, doc = await _load_document_for_extraction(document_id, user, {"application/pdf"})
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=501, detail="AI analysis is not configured on this server yet")
 
-    try:
-        analysis = await asyncio.to_thread(analyze_policy_with_gemini, contents)
-    except AIAnalysisUnavailable as exc:
-        raise HTTPException(status_code=501, detail="AI analysis is not configured on this server yet") from exc
-    except AIAnalysisFailed as exc:
-        logger.error("Gemini policy analysis failed: %s", exc)
-        if "RESOURCE_EXHAUSTED" in str(exc) or "429" in str(exc):
-            raise HTTPException(status_code=429, detail="You've hit Gemini's daily free-tier limit (20 requests/day) - try again tomorrow, or add billing to your Google AI Studio project for a higher limit") from exc
-        raise HTTPException(status_code=502, detail="AI analysis failed - try the standard scan instead") from exc
-
-    await audit(user, "policy_document_ai_analyzed", f"AI-analyzed already-uploaded '{doc['filename']}' for policy details")
-    analysis["source"] = "ai"
-    return analysis
+    job_id = await _start_ai_job(background_tasks, user["household_id"], analyze_policy_with_gemini, contents)
+    await audit(user, "policy_document_ai_analyzed", f"Started AI analysis for already-uploaded '{doc['filename']}'")
+    return {"job_id": job_id, "status": "processing"}
 
 
 @api_router.post("/policies")

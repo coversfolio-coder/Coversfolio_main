@@ -30,6 +30,30 @@ const emptyForm = {
   insured_people: [{ name: "", relation: "Self", dob: "" }],
 };
 
+// The backend now returns a job_id immediately from an AI-analysis request
+// and does the actual (possibly slow) work in the background - this polls
+// for the result instead of waiting on one long request, since a single
+// request can't safely stay open as long as Gemini might actually take.
+// Throws an axios-shaped error on failure so existing `apiError(err)` and
+// `err?.response?.status` catch-block logic keeps working unchanged.
+async function pollAIJob(jobId, { maxWaitMs = 90000, intervalMs = 2000 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const res = await client.get(`/ai-jobs/${jobId}`);
+    if (res.data.status === "done") return res.data.result;
+    if (res.data.status === "failed") {
+      const statusCode = res.data.error_code === "quota" ? 429 : res.data.error_code === "unavailable" ? 501 : 502;
+      const err = new Error(res.data.message);
+      err.response = { status: statusCode, data: { detail: res.data.message } };
+      throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  const timeoutErr = new Error("AI analysis is taking longer than expected - try again in a moment");
+  timeoutErr.response = { status: 504, data: { detail: timeoutErr.message } };
+  throw timeoutErr;
+}
+
 export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsumed }) {
   const [policies, setPolicies] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -90,9 +114,10 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const analyzeRes = await client.post("/policies/extract-ai", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
-      const { source, ...insights } = analyzeRes.data;
-      await client.put(`/policies/${policyId}`, { ai_insights: insights });
+      const analyzeRes = await client.post("/policies/extract-ai", formData, { headers: { "Content-Type": "multipart/form-data" } });
+      const insights = await pollAIJob(analyzeRes.data.job_id);
+      const { source, ...restInsights } = insights;
+      await client.put(`/policies/${policyId}`, { ai_insights: restInsights });
       notify("AI analysis added to this policy");
       load();
     } catch (err) {
@@ -226,8 +251,9 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await client.post("/policies/extract-ai", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 120000 });
-      applyAIScanFields(res.data);
+      const res = await client.post("/policies/extract-ai", formData, { headers: { "Content-Type": "multipart/form-data" } });
+      const result = await pollAIJob(res.data.job_id);
+      applyAIScanFields(result);
       setScannedFrom(file.name);
       notify(`AI analysis complete for ${file.name}`);
     } catch (err) {
@@ -270,13 +296,15 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
         notify(foundCount > 0 ? `Found ${foundCount} detail${foundCount === 1 ? "" : "s"} in ${doc.filename}` : `Couldn't detect policy details in ${doc.filename} - please fill them in manually`);
       } else if (docPicker.purpose === "ai") {
         const res = await client.post(`/policies/extract-ai-from-document/${doc.id}`);
-        applyAIScanFields(res.data);
+        const result = await pollAIJob(res.data.job_id);
+        applyAIScanFields(result);
         setScannedFrom(doc.filename);
         notify(`AI analysis complete for ${doc.filename}`);
       } else if (docPicker.purpose === "retro-ai") {
         const res = await client.post(`/policies/extract-ai-from-document/${doc.id}`);
-        const { source, ...insights } = res.data;
-        await client.put(`/policies/${docPicker.policyId}`, { ai_insights: insights });
+        const insights = await pollAIJob(res.data.job_id);
+        const { source, ...restInsights } = insights;
+        await client.put(`/policies/${docPicker.policyId}`, { ai_insights: restInsights });
         notify("AI analysis added to this policy");
         load();
       }
