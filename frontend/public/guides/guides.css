@@ -32,3 +32,9 @@ p{color:var(--muted);margin:0 0 14px}
 .g-tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;background:var(--canvas);color:var(--muted);padding:3px 9px;border-radius:10px;margin-bottom:14px}
 .g-footer{text-align:center;padding:30px 20px;font-size:12px;color:var(--faint)}
 .g-footer a{color:var(--muted)}
+
+.g-whatsapp-btn{display:inline-flex;align-items:center;gap:9px;background:#25D366;color:#fff;font-weight:600;font-size:13.5px;text-decoration:none;padding:11px 20px;border-radius:8px;margin:6px 0 0}
+.g-whatsapp-btn:hover{background:#1fb958}
+.g-whatsapp-btn svg{flex-shrink:0}
+.g-share-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:18px 0}
+.g-share-hint{font-size:12px;color:var(--faint)}
