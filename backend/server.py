@@ -1056,13 +1056,12 @@ def analyze_policy_with_gemini(pdf_bytes: bytes) -> dict:
     if not GEMINI_API_KEY:
         raise AIAnalysisUnavailable("AI analysis is not configured on this server")
 
-    # Without an explicit timeout, the underlying HTTP client can hang far
-    # longer than DigitalOcean's own gateway timeout - the platform then kills
-    # the connection and returns a generic 504 with no information about what
-    # actually went wrong. Failing fast here, comfortably under the platform's
-    # timeout, means a real error (see below) reaches the person instead of a
-    # bare 504.
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=25_000))
+    # This now runs as a background job (see _start_ai_job), completely
+    # decoupled from any HTTP request's lifetime - the frontend polls for the
+    # result instead of waiting on one open connection. That means this
+    # timeout no longer needs to stay under a gateway's own limit; it can be
+    # generous enough for a genuinely large or complex policy document.
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=50_000))
     # Gemini occasionally returns a 503 "currently experiencing high demand -
     # please try again later" - that's Google's own servers being temporarily
     # overloaded, not something wrong with the request, so it's worth a couple
@@ -1098,7 +1097,7 @@ def analyze_policy_with_gemini(pdf_bytes: bytes) -> dict:
                 time.sleep(1)
                 continue
         except (httpx.TimeoutException, TimeoutError) as exc:
-            logger.error("Gemini request timed out after 25s: %s", exc)
+            logger.error("Gemini request timed out after 50s: %s", exc)
             raise AIAnalysisFailed("Gemini didn't respond in time - this can happen with a large or complex document. Try again, or use the standard scan instead.") from exc
         except Exception as exc:
             raise AIAnalysisFailed(str(exc)) from exc
@@ -4161,24 +4160,32 @@ def ask_agent_with_gemini(message: str, history: list[dict], household_context: 
     for turn in history:
         contents.append(genai_types.Content(role="user" if turn["role"] == "user" else "model", parts=[genai_types.Part.from_text(text=turn["content"])]))
     contents.append(genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=message)]))
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL, contents=contents,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048,
-                # A small, non-zero thinking budget (rather than exactly 0) is
-                # far more broadly accepted across model variants - some
-                # models reject 0 outright, which previously meant falling
-                # back to a second call with NO thinking limit at all: a
-                # second, potentially slow request stacked on top of the
-                # first failed one. A single bounded call is both simpler and
-                # has a much lower worst-case latency.
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=100),
-            ),
-        )
-        return response.text
-    except Exception as exc:
-        raise AIAnalysisFailed(str(exc)) from exc
+    config = genai_types.GenerateContentConfig(
+        system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048,
+        # A small, non-zero thinking budget (rather than exactly 0) is far
+        # more broadly accepted across model variants - some models reject 0
+        # outright.
+        thinking_config=genai_types.ThinkingConfig(thinking_budget=100),
+    )
+    # Gemini occasionally rejects a request with "503 UNAVAILABLE - currently
+    # experiencing high demand" - Google's own servers being temporarily
+    # overloaded, not a problem with the request itself. Confirmed from real
+    # production logs that this specific error comes back fast (not a slow
+    # hang), so one bounded retry is safe and worth doing, unlike blindly
+    # retrying every kind of failure.
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        try:
+            response = client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=config)
+            return response.text
+        except genai_errors.ServerError as exc:
+            if attempt < max_attempts - 1:
+                logger.warning("Gemini server error on agent ask (attempt %d/%d), retrying: %s", attempt + 1, max_attempts, exc)
+                time.sleep(1)
+                continue
+            raise AIAnalysisFailed(str(exc)) from exc
+        except Exception as exc:
+            raise AIAnalysisFailed(str(exc)) from exc
 
 
 @api_router.post("/agent/ask")
