@@ -467,6 +467,11 @@ class PolicyCreate(BaseModel):
     # older saved policies won't have it, but genuinely useful when citing
     # the exact product in correspondence with the insurer or IRDAI.
     uin: str | None = Field(default=None, max_length=40)
+    # If the person scanned a policy document to fill this form, the file was
+    # already uploaded and stored separately (so it can be downloaded again
+    # later) - this links that existing document to the policy once it's
+    # actually created, since the policy doesn't have an id yet at scan time.
+    scanned_document_id: str | None = Field(default=None, max_length=60)
     # Optional: carried over from an "Analyze with AI" pass, if the person ran one
     # before saving. Kept loosely-typed (plain dict) rather than importing the
     # PolicyAIAnalysis schema here, since that class is defined further down this
@@ -2071,6 +2076,8 @@ async def get_dashboard(user: dict = Depends(current_user)):
 
         ai_insights = policy.get("ai_insights") or {}
         first_covered = policy.get("first_covered_date") or policy.get("start_date", "")
+        covered_names = [person.get("name") for person in (policy.get("insured_people") or []) if person.get("name")]
+        covered_text = f" Covers: {', '.join(covered_names)}." if covered_names else ""
 
         # Maternity waiting period - a real countdown to a genuinely important
         # date, not just an abstract "X months" fact from the policy wording.
@@ -2082,27 +2089,31 @@ async def get_dashboard(user: dict = Depends(current_user)):
                 deadlines.append({
                     "date": end_dt.strftime("%d"), "month": end_dt.strftime("%b").upper(),
                     "label": f"Maternity cover begins - {policy['insurer_name']}",
-                    "meta": f"{mat_status['days_remaining']} days left in the waiting period",
+                    "meta": f"{mat_status['days_remaining']} days left in the waiting period.{covered_text}",
                     "_sort": end_dt,
                 })
 
         # Free annual health checkup - reuses the same eligibility computation
         # already used in the policy's own detail view, so the two never
-        # disagree with each other.
+        # disagree with each other. Tracked once per POLICY, not per person -
+        # said explicitly here rather than left implicit, since a family
+        # floater covers several people and this app has no way yet to know
+        # whether it was used for one of them specifically or all of them.
         checkup_status = compute_policy_benefits(policy, ai_insights, status_info, utilization).get("health_checkup")
         if checkup_status:
             how_to_use = checkup_status.get("notes") or "Check your policy wording or call your insurer for how to book it."
+            scope_note = " Tracked once for the whole policy, not separately per person." if len(covered_names) > 1 else ""
             if checkup_status.get("eligible_now"):
                 attention.append({
                     "label": f"Free health checkup available now - {policy['insurer_name']}",
-                    "detail": how_to_use, "tone": "teal", "target_type": "policy", "target_id": policy["id"],
+                    "detail": f"{how_to_use}{covered_text}{scope_note}", "tone": "teal", "target_type": "policy", "target_id": policy["id"],
                 })
             elif checkup_status.get("next_eligible_date"):
                 next_dt = datetime.strptime(checkup_status["next_eligible_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
                 deadlines.append({
                     "date": next_dt.strftime("%d"), "month": next_dt.strftime("%b").upper(),
                     "label": f"Health checkup eligible again - {policy['insurer_name']}",
-                    "meta": how_to_use, "_sort": next_dt,
+                    "meta": f"{how_to_use}{covered_text}{scope_note}", "_sort": next_dt,
                 })
 
     deadlines.sort(key=lambda d: d["_sort"])
@@ -2674,6 +2685,11 @@ async def create_policy(input: PolicyCreate, user: dict = Depends(current_user))
         "created_at": now, "updated_at": now,
     }
     await db.policies.insert_one(policy)
+    if input.scanned_document_id:
+        await db.documents.update_one(
+            {"id": input.scanned_document_id, "household_id": user["household_id"]},
+            {"$set": {"linked_policy_id": policy["id"]}},
+        )
     await audit(user, "policy_added", f"Added {input.insurer_name} policy {input.policy_number}")
     return _public_policy(policy)
 

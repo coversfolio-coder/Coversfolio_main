@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import client, { apiError } from "@/api";
-import { ArrowUpRight, BookOpen, Check, FileScan, FileText, MapPin, Plus, ShieldQuestion, Sparkles, Trash2, Upload, Users, X } from "lucide-react";
+import client, { API, apiError } from "@/api";
+import { ArrowUpRight, BookOpen, Check, Download, FileScan, FileText, MapPin, Plus, ShieldQuestion, Sparkles, Trash2, Upload, Users, X } from "lucide-react";
 
 function InfoTip({ text }) {
   const [open, setOpen] = useState(false);
@@ -61,6 +61,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scannedFrom, setScannedFrom] = useState(null);
+  const [scannedDocumentId, setScannedDocumentId] = useState(null);
   const [typeTouched, setTypeTouched] = useState(false);
   const [hospitalPolicy, setHospitalPolicy] = useState(null);
   const [hospitalCity, setHospitalCity] = useState("");
@@ -70,12 +71,15 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
   // One modal now shows everything stored about a policy - basic details, AI
   // coverage insights, and maximize-benefits - instead of three separate ones.
   const [detailsPolicy, setDetailsPolicy] = useState(null);
+  const [linkedDocuments, setLinkedDocuments] = useState([]);
   const [loggingCheckup, setLoggingCheckup] = useState(false);
 
   const openDetails = (policy) => {
     setDetailsPolicy(policy);
     setConditionQuery("");
     setConditionResult(null);
+    setLinkedDocuments([]);
+    client.get(`/documents?policy_id=${policy.id}`).then((res) => setLinkedDocuments(res.data.documents || [])).catch(() => {});
   };
 
   const logCheckupUsed = async (policyId) => {
@@ -118,6 +122,11 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       const insights = await pollAIJob(analyzeRes.data.job_id);
       const { source, ...restInsights } = insights;
       await client.put(`/policies/${policyId}`, { ai_insights: restInsights });
+      const docForm = new FormData();
+      docForm.append("file", file);
+      docForm.append("category", "policy_document");
+      docForm.append("linked_policy_id", policyId);
+      client.post("/documents", docForm, { headers: { "Content-Type": "multipart/form-data" } }).catch(() => {});
       notify("AI analysis added to this policy");
       load();
     } catch (err) {
@@ -223,12 +232,27 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
     });
   };
 
+  // Saves the file used for a scan as a real, downloadable document - failures
+  // here are deliberately non-fatal (silently skipped) since the scan/AI
+  // extraction the person actually asked for already succeeded regardless.
+  const saveScannedDocument = async (file) => {
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("category", "policy_document");
+      const res = await client.post("/documents", formData, { headers: { "Content-Type": "multipart/form-data" } });
+      setScannedDocumentId(res.data.id);
+      return res.data.id;
+    } catch { return null; }
+  };
+
   const onFilePicked = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
     setScanning(true);
     setScannedFrom(null);
+    setScannedDocumentId(null);
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -237,6 +261,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       applyScanFields(detected);
       const foundCount = ["insurer_name", "policy_number", "policy_type", "sum_insured", "start_date", "end_date"].filter((k) => detected[k]).length + (detected.insured_people?.length > 0 ? 1 : 0);
       setScannedFrom(file.name);
+      saveScannedDocument(file);
       notify(foundCount > 0 ? `Found ${foundCount} detail${foundCount === 1 ? "" : "s"} in ${file.name}` : `Couldn't detect policy details in ${file.name} - please fill them in manually`);
     } catch (err) { notify(apiError(err), true); } finally { setScanning(false); }
   };
@@ -248,6 +273,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
     setAnalyzingAI(true);
     setAiInsights(null);
     setScannedFrom(null);
+    setScannedDocumentId(null);
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -255,6 +281,7 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
       const result = await pollAIJob(res.data.job_id);
       applyAIScanFields(result);
       setScannedFrom(file.name);
+      saveScannedDocument(file);
       notify(`AI analysis complete for ${file.name}`);
     } catch (err) {
       if (err?.response?.status === 501) notify("AI analysis isn't set up on this server yet - use the standard scan instead", true);
@@ -324,11 +351,13 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
         sum_insured: Number(form.sum_insured),
         insured_people: form.insured_people.filter((p) => p.name.trim()),
         ai_insights: aiInsights || null,
+        scanned_document_id: scannedDocumentId || null,
       });
       notify("Policy added");
       setForm(emptyForm);
       setTypeTouched(false);
       setScannedFrom(null);
+      setScannedDocumentId(null);
       setAiInsights(null);
       setShowForm(false);
       load();
@@ -469,6 +498,21 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                 <MapPin size={13} /> Find network hospitals
               </button>
 
+              {linkedDocuments.length > 0 && (
+                <div data-testid="policy-document-downloads" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {linkedDocuments.map((doc) => (
+                    <a
+                      key={doc.id} className="text-button"
+                      href={`${API}/documents/${doc.id}/download?disposition=attachment`}
+                      target="_blank" rel="noreferrer"
+                      data-testid={`download-policy-document-${doc.id}`}
+                    >
+                      <Download size={13} /> Download {doc.filename}
+                    </a>
+                  ))}
+                </div>
+              )}
+
               {!detailsPolicy.ai_insights && aiEnabled && canEdit && (
                 <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                   <button
@@ -555,9 +599,12 @@ export default function PoliciesPage({ canEdit, notify, prefill, onPrefillConsum
                   <div style={{ marginBottom: 18 }}>
                     <p className="eyebrow" style={{ marginBottom: 8 }}>KEY EXCLUSIONS</p>
                     {hasExclusions ? (
-                      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
-                        {insights.key_exclusions.map((ex, i) => <li key={i} style={{ marginBottom: 4 }}>{ex}</li>)}
-                      </ul>
+                      <>
+                        <p style={{ fontSize: 11, color: "var(--muted)", margin: "0 0 6px" }}>These apply regardless of who on this policy the claim is for.</p>
+                        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                          {insights.key_exclusions.map((ex, i) => <li key={i} style={{ marginBottom: 4 }}>{ex}</li>)}
+                        </ul>
+                      </>
                     ) : (
                       <p style={{ fontSize: 11, color: "var(--muted)" }}>No exclusions were listed in what we could extract from this document.</p>
                     )}
