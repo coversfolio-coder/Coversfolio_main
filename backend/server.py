@@ -2069,6 +2069,42 @@ async def get_dashboard(user: dict = Depends(current_user)):
         elif status_info["status"] == "active" and status_info["days_remaining"] is not None and status_info["days_remaining"] <= 30:
             attention.append({"label": f"{policy['insurer_name']} policy renews soon", "detail": status_info["days_label"], "tone": "amber", "target_type": "policy", "target_id": policy["id"]})
 
+        ai_insights = policy.get("ai_insights") or {}
+        first_covered = policy.get("first_covered_date") or policy.get("start_date", "")
+
+        # Maternity waiting period - a real countdown to a genuinely important
+        # date, not just an abstract "X months" fact from the policy wording.
+        maternity = ai_insights.get("maternity_cover")
+        if maternity and maternity.get("covered") and maternity.get("waiting_period_months"):
+            mat_status = compute_waiting_status(first_covered, maternity["waiting_period_months"])
+            if mat_status["covered_now"] is False and mat_status["days_remaining"] is not None:
+                end_dt = datetime.now(timezone.utc) + timedelta(days=mat_status["days_remaining"])
+                deadlines.append({
+                    "date": end_dt.strftime("%d"), "month": end_dt.strftime("%b").upper(),
+                    "label": f"Maternity cover begins - {policy['insurer_name']}",
+                    "meta": f"{mat_status['days_remaining']} days left in the waiting period",
+                    "_sort": end_dt,
+                })
+
+        # Free annual health checkup - reuses the same eligibility computation
+        # already used in the policy's own detail view, so the two never
+        # disagree with each other.
+        checkup_status = compute_policy_benefits(policy, ai_insights, status_info, utilization).get("health_checkup")
+        if checkup_status:
+            how_to_use = checkup_status.get("notes") or "Check your policy wording or call your insurer for how to book it."
+            if checkup_status.get("eligible_now"):
+                attention.append({
+                    "label": f"Free health checkup available now - {policy['insurer_name']}",
+                    "detail": how_to_use, "tone": "teal", "target_type": "policy", "target_id": policy["id"],
+                })
+            elif checkup_status.get("next_eligible_date"):
+                next_dt = datetime.strptime(checkup_status["next_eligible_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                deadlines.append({
+                    "date": next_dt.strftime("%d"), "month": next_dt.strftime("%b").upper(),
+                    "label": f"Health checkup eligible again - {policy['insurer_name']}",
+                    "meta": how_to_use, "_sort": next_dt,
+                })
+
     deadlines.sort(key=lambda d: d["_sort"])
     deadlines = [{k: v for k, v in d.items() if k != "_sort"} for d in deadlines[:5]]
 

@@ -215,6 +215,7 @@ button.profile:hover{background:rgba(255,255,255,.05)}button.profile svg{color:#
 .attn-row-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .attn-row-dot.crit{background:var(--red)}
 .attn-row-dot.warn{background:var(--gold)}
+.attn-row-dot.good{background:var(--teal)}
 .dropdown-backdrop{position:fixed;inset:0;z-index:9}
 .search-dropdown,.notif-dropdown{position:absolute;top:calc(100% + 10px);right:-8px;width:340px;max-height:420px;overflow-y:auto;background:#fff;border-radius:10px;box-shadow:0 16px 40px #22315c1f;border:1px solid var(--line);z-index:10}
 .search-dropdown input{width:100%;border:0;border-bottom:1px solid var(--line);padding:14px;font:500 13px var(--body);outline:none;box-sizing:border-box}

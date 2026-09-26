@@ -557,6 +557,7 @@ function AgentWidget({ notify }) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
+  const [policies, setPolicies] = useState([]);
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -564,6 +565,7 @@ function AgentWidget({ notify }) {
       .then((res) => setMessages(res.data.messages.map((m) => ({ role: m.role, content: m.content }))))
       .catch(() => {})
       .finally(() => setLoadingHistory(false));
+    client.get("/policies").then((res) => setPolicies(res.data.policies || [])).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -637,6 +639,24 @@ function AgentWidget({ notify }) {
                 <div className="agent-message agent-message-assistant" data-testid="agent-greeting">
                   Hi, I'm Cova. Ask me about your policies, your claims, or a general insurance question - whatever's easiest.
                 </div>
+                {policies.length > 1 && (
+                  <>
+                    <div className="agent-message agent-message-assistant" data-testid="agent-policy-prompt">
+                      You've got {policies.length} policies - which one is this about?
+                    </div>
+                    <div className="agent-suggestions" data-testid="agent-policy-chips">
+                      {policies.map((p) => (
+                        <button
+                          type="button" key={p.id} className="agent-suggestion-chip"
+                          onClick={() => ask(`Tell me about my ${p.insurer_name} ${p.policy_type || ""} policy`.trim())}
+                          data-testid={`agent-policy-chip-${p.id}`}
+                        >
+                          {p.insurer_name}{p.policy_type ? ` - ${p.policy_type}` : ""}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
                 <div className="agent-suggestions" data-testid="agent-suggestions">
                   {AGENT_SUGGESTIONS.map((s) => (
                     <button type="button" key={s} className="agent-suggestion-chip" onClick={() => ask(s)} data-testid={`agent-suggestion-${s}`}>{s}</button>
@@ -916,7 +936,7 @@ function App() {
                     <p className="empty-hint" style={{ padding: "0 14px 14px", margin: 0 }}>You're all caught up.</p>
                   ) : data.attention.map((item, i) => (
                     <button key={i} className="search-result-row" data-testid={`notif-item-${i}`} onClick={() => goToAttentionItem(item)}>
-                      <span className={`attn-row-dot ${item.tone === "red" ? "crit" : "warn"}`} />
+                      <span className={`attn-row-dot ${item.tone === "red" ? "crit" : item.tone === "teal" ? "good" : "warn"}`} />
                       <span><strong>{item.label}</strong><small>{item.detail}</small></span>
                     </button>
                   ))}
@@ -983,7 +1003,7 @@ function App() {
             <p className="dash-panel-title">Needs attention</p>
             {data.attention.length === 0 ? <p className="empty-hint">Nothing needs your attention right now.</p> : data.attention.map((item, i) => (
               <button className="attn-row" key={item.label} data-testid={`attention-item-${i}`} onClick={() => goToAttentionItem(item)} style={{ width: "100%", border: 0, background: "transparent", cursor: "pointer", textAlign: "left" }}>
-                <span className={`attn-row-dot ${item.tone === "red" ? "crit" : "warn"}`} />
+                <span className={`attn-row-dot ${item.tone === "red" ? "crit" : item.tone === "teal" ? "good" : "warn"}`} />
                 <div className="attn-row-body"><div className="attn-row-title">{item.label}</div><div className="attn-row-meta">{item.detail}</div></div>
               </button>
             ))}
