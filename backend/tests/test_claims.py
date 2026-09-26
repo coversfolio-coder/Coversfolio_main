@@ -464,3 +464,16 @@ def test_regulatory_unseen_count_and_mark_seen(registered_user, monkeypatch):
     r = client.get("/api/auth/me")
     assert r.json()["regulatory_unseen_count"] == 0
     print("Unseen count correctly tracked and cleared on mark-seen")
+def test_build_agent_household_context_includes_insured_people():
+    """Reproduces the exact real bug: Cova claimed it couldn't see covered
+    family members even though the policy record already listed them."""
+    import server as srv
+    policies = [{
+        "insurer_name": "Reliance General", "policy_type": "Health", "sum_insured": 1000000,
+        "start_date": "2026-09-09", "end_date": "2029-09-08",
+        "insured_people": [{"name": "Chhaya", "relation": "Self", "dob": ""}, {"name": "Aavya", "relation": "Daughter", "dob": ""}],
+    }]
+    context = srv.build_agent_household_context(policies, [], [])
+    assert "Chhaya (Self)" in context
+    assert "Aavya (Daughter)" in context
+    print("Covered people now correctly reach Cova's context:", context)

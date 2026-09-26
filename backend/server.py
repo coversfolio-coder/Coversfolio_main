@@ -4248,6 +4248,11 @@ def build_agent_household_context(policies: list[dict], claims: list[dict], docu
     lines = []
     for p in policies:
         lines.append(f"- Policy: {p.get('insurer_name')} {p.get('policy_type')}, sum insured \u20B9{format_inr(p.get('sum_insured', 0))}, valid {p.get('start_date')} to {p.get('end_date')}")
+        insured_people = p.get("insured_people") or []
+        if insured_people:
+            people_text = ", ".join(f"{person.get('name')} ({person.get('relation')})" for person in insured_people if person.get("name"))
+            if people_text:
+                lines.append(f"  Covered people: {people_text}")
         insights = p.get("ai_insights") or {}
         pdw_months = insights.get("pre_existing_disease_waiting_months")
         if pdw_months is not None:
