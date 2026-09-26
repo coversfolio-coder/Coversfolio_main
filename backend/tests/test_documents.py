@@ -97,3 +97,22 @@ def test_scan_discharge_summary_requires_auth():
     anon_client = TestClient(srv.app)
     r = anon_client.post("/api/tools/scan-discharge-summary", files={"file": ("d.pdf", b"%PDF-1.4", "application/pdf")})
     assert r.status_code == 401
+from PIL import Image, ImageDraw, ImageFont
+
+def test_document_upload_automatically_extracts_text_without_manual_ocr_call(registered_user):
+    """Confirms extracted_text gets populated automatically right after
+    upload, in the background - without the person needing to separately
+    call the manual /documents/{id}/ocr endpoint."""
+    client, user = registered_user
+    img_bytes = _make_test_image(["Fortis Hospital - Discharge Summary", "Diagnosis: Acute Appendicitis"])
+
+    r = client.post("/api/documents", files={"file": ("discharge.png", img_bytes, "image/png")}, data={"category": "discharge_summary"})
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["id"]
+
+    # No manual OCR call made - just check the document directly
+    r2 = client.get("/api/documents")
+    doc = next(d for d in r2.json()["documents"] if d["id"] == doc_id)
+    assert doc.get("extracted_text"), "extracted_text should be populated automatically, without a manual OCR call"
+    assert "Appendicitis" in doc["extracted_text"]
+    print("Automatic OCR correctly extracted:", doc["extracted_text"][:80])

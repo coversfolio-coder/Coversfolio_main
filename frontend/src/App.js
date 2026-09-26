@@ -582,14 +582,26 @@ function AgentWidget({ notify }) {
     setInput("");
     setSending(true);
     try {
-      const res = await client.post("/agent/ask", { message: text, history }, { timeout: 25000 });
-      setMessages((prev) => [...prev, { role: "assistant", content: res.data.answer }]);
+      const res = await client.post("/agent/ask", { message: text, history });
+      const jobId = res.data.job_id;
+      const start = Date.now();
+      let answer = null;
+      while (Date.now() - start < 90000) {
+        const jobRes = await client.get(`/ai-jobs/${jobId}`);
+        if (jobRes.data.status === "done") { answer = jobRes.data.result; break; }
+        if (jobRes.data.status === "failed") {
+          answer = jobRes.data.error_code === "quota"
+            ? "I've hit today's usage limit - try again tomorrow."
+            : "Sorry, I couldn't get a response - try again.";
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      setMessages((prev) => [...prev, { role: "assistant", content: answer || "That took too long to answer - try a shorter question, or try again." }]);
     } catch (err) {
-      const message = err?.code === "ECONNABORTED"
-        ? "That took too long to answer - try a shorter question, or try again."
-        : err?.response?.status === 501
-          ? "The assistant isn't set up on this server yet."
-          : "Sorry, I couldn't get a response - try again.";
+      const message = err?.response?.status === 501
+        ? "The assistant isn't set up on this server yet."
+        : "Sorry, I couldn't get a response - try again.";
       setMessages((prev) => [...prev, { role: "assistant", content: message }]);
     } finally { setSending(false); }
   };

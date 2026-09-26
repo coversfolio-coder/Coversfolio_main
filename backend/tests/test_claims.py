@@ -397,10 +397,16 @@ def test_build_agent_household_context_includes_real_policy_data():
         "start_date": "2022-01-01", "end_date": "2027-01-01", "first_covered_date": "2022-01-01",
         "ai_insights": {"pre_existing_disease_waiting_months": 36, "key_exclusions": ["Cosmetic surgery"]},
     }]
-    context = srv.build_agent_household_context(policies, [])
+    documents = [{
+        "filename": "discharge.pdf", "category": "discharge_summary", "bill_amount": None, "bill_date": None,
+        "extracted_text": "Patient diagnosed with Acute Appendicitis, underwent laparoscopic appendectomy.",
+    }]
+    context = srv.build_agent_household_context(policies, [], documents)
     assert "Star Health" in context
     assert "₹10,00,000" in context
     assert "already passed" in context
+    assert "discharge.pdf" in context
+    assert "Acute Appendicitis" in context
     assert "Cosmetic surgery" in context
 
 def test_agent_conversation_starts_empty_and_persists(registered_user, monkeypatch):

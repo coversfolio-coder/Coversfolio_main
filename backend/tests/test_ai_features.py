@@ -203,8 +203,16 @@ def test_agent_ask_retries_once_on_503_then_succeeds(registered_user, monkeypatc
     srv.time.sleep = lambda s: None
     make_policy(client, insurer_name="Star Health")
 
+    class FakePart:
+        function_call = None
+        def __init__(self, text): self.text = text
+    class FakeContent:
+        def __init__(self, text): self.parts = [FakePart(text)]
+    class FakeCandidate:
+        def __init__(self, text): self.content = FakeContent(text)
     class FakeResponse:
         text = "Your Star Health policy is active."
+        candidates = [FakeCandidate("Your Star Health policy is active.")]
 
     call_count = {"n": 0}
 
@@ -220,7 +228,10 @@ def test_agent_ask_retries_once_on_503_then_succeeds(registered_user, monkeypatc
         MockClient.return_value = mock_instance
         r = client.post("/api/agent/ask", json={"message": "Is my policy active?"})
         assert r.status_code == 200, r.text
-        assert r.json()["answer"] == "Your Star Health policy is active."
+        job_id = r.json()["job_id"]
+        job = client.get(f"/api/ai-jobs/{job_id}").json()
+        assert job["status"] == "done"
+        assert job["result"] == "Your Star Health policy is active."
         assert call_count["n"] == 2
         print("Correctly retried once on 503 and succeeded, matching the real production scenario")
 
@@ -239,4 +250,7 @@ def test_agent_ask_fails_cleanly_after_max_retries(registered_user, monkeypatch)
         mock_instance.models.generate_content.side_effect = side_effect
         MockClient.return_value = mock_instance
         r = client.post("/api/agent/ask", json={"message": "hello"})
-        assert r.status_code == 502
+        assert r.status_code == 200
+        job_id = r.json()["job_id"]
+        job = client.get(f"/api/ai-jobs/{job_id}").json()
+        assert job["status"] == "failed"

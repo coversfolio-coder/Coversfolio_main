@@ -948,15 +948,21 @@ class AIAnalysisFailed(Exception):
 
 
 async def _run_ai_job(job_id: str, func, *args):
-    """Runs a slow, blocking AI function in a worker thread and stores the
-    outcome on the job document - this is what actually solves the gateway
-    504 problem: the HTTP request that created this job already returned
-    immediately, so however long the real Gemini call takes (even minutes),
-    no single request is ever left open waiting for it. The frontend polls
-    the job's status separately instead."""
+    """Runs a slow AI function - in a worker thread if it's a plain sync
+    function (blocking network calls), or awaited directly if it's already
+    async (like Cova's tool-calling orchestration, which does its own
+    internal thread-offloading per Gemini call) - and stores the outcome on
+    the job document. This is what actually solves the gateway 504 problem:
+    the HTTP request that created this job already returned immediately, so
+    however long the real work takes (even minutes, or several chained
+    Gemini calls), no single request is ever left open waiting for it. The
+    frontend polls the job's status separately instead."""
     now = lambda: datetime.now(timezone.utc).isoformat()
     try:
-        result = await asyncio.to_thread(func, *args)
+        if asyncio.iscoroutinefunction(func):
+            result = await func(*args)
+        else:
+            result = await asyncio.to_thread(func, *args)
         await db.ai_jobs.update_one({"id": job_id}, {"$set": {"status": "done", "result": result, "completed_at": now()}})
     except AIAnalysisUnavailable as exc:
         await db.ai_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error_code": "unavailable", "error": str(exc), "completed_at": now()}})
@@ -1468,8 +1474,10 @@ async def get_ai_job(job_id: str, user: dict = Depends(current_user)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job["status"] == "done":
-        result = dict(job["result"])
-        result["source"] = "ai"
+        result = job["result"]
+        if isinstance(result, dict):
+            result = dict(result)
+            result["source"] = "ai"
         return {"status": "done", "result": result}
     if job["status"] == "failed":
         return {"status": "failed", "error_code": job.get("error_code", "failed"), "message": AI_JOB_ERROR_MESSAGES.get(job.get("error_code"), AI_JOB_ERROR_MESSAGES["failed"])}
@@ -2926,8 +2934,35 @@ async def list_documents(claim_id: str | None = None, policy_id: str | None = No
     return {"documents": [_public_document(d) for d in docs]}
 
 
+async def _run_document_ocr_job(document_id: str, household_id: str, filename: str, content_type: str, stored_path: str):
+    """Runs automatically right after upload, in the background - the person
+    never waits on this or sees a 'job' to poll, it just quietly fills in
+    extracted_text so it's there by the time anything (Cova, full-text
+    search) needs it. Never raises - a failure here must never surface as an
+    error for what was, from the uploader's perspective, a successful upload."""
+    try:
+        contents = await asyncio.to_thread(storage_load, stored_path)
+        existing_text_layer = None
+        if content_type == "application/pdf":
+            try:
+                existing_text_layer = extract_document_text(filename, content_type, contents)
+            except Exception:
+                existing_text_layer = None
+        result = await asyncio.to_thread(
+            ocr_module.extract_text, filename, content_type, contents,
+            gemini_api_key=GEMINI_API_KEY, gemini_model=GEMINI_MODEL, existing_text_layer=existing_text_layer,
+        )
+        await db.documents.update_one(
+            {"id": document_id, "household_id": household_id},
+            {"$set": {"extracted_text": result["text"], "extracted_text_method": result["method"]}},
+        )
+    except Exception as exc:
+        logger.warning("Automatic OCR failed for document %s: %s", document_id, exc)
+
+
 @api_router.post("/documents")
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     category: str = Form(default="general"),
     linked_claim_id: str | None = Form(default=None),
@@ -2966,6 +3001,9 @@ async def upload_document(
         "stored_path": str(stored_path), "uploaded_at": now,
     }
     await db.documents.insert_one(doc)
+
+    if file.content_type in OCR_SUPPORTED_TYPES:
+        background_tasks.add_task(_run_document_ocr_job, doc_id, user["household_id"], doc["filename"], file.content_type, stored_path)
 
     if linked_evidence_id:
         await db.evidence.update_one({"id": linked_evidence_id, "household_id": user["household_id"]}, {"$push": {"document_ids": doc_id}})
@@ -4078,18 +4116,19 @@ class AgentAskInput(BaseModel):
 
 AGENT_SYSTEM_PROMPT = """You are Cova, Coversfolio's in-app assistant, helping an Indian household member with their insurance policies and claims. If asked your name, say Cova.
 
-You have two kinds of information below: (1) this household's own data - their actual policies and claims, and (2) general reference information - IRDAI rules that apply to everyone, not just this household.
+You have three kinds of information available, and answering well means checking them in this order:
+1. This household's own data below - their actual policies, claims, and the real text extracted from documents they've uploaded (discharge summaries, bills, policy wording, etc.). Always check this first.
+2. Two tools you can call: search_documents(query) searches ALL of this household's uploaded documents (not just the ones already shown below) for a keyword - use it when the answer might be in an older document, or one not already summarized. get_document_text(document_id) returns a document's full text when a short excerpt isn't enough - use it after search_documents points you to a specific document.
+3. Only if the answer genuinely isn't in (1) or your own tool calls in (2): end your ENTIRE response with exactly this, and nothing else: NEEDS_WEB_SEARCH: <a short, specific search query>. Never search for something you can already answer from the household's own documents, and never combine this marker with any other text in the same response.
 
 Rules for answering:
-- If the answer comes from their own data, say so plainly (e.g. "Your Star Health policy...")
-- If the answer is general insurance/regulatory knowledge, say so too (e.g. "Under IRDAI rules in general...")
-- Never blend the two without being clear which is which
-- If you don't have enough information to answer confidently, say so rather than guessing
+- Always be clear which source an answer came from - "Your discharge summary shows...", "Your Star Health policy document says...", "Under IRDAI rules in general..."
+- If you don't have enough information to answer confidently even after using your tools, say so rather than guessing - or use the NEEDS_WEB_SEARCH marker if a web search might genuinely help
 - Keep answers short and practical - a few sentences, not an essay
 - You cannot take any action (you can't file a claim, upload a document, or change data) - if asked to do something, name the actual screen/button to use instead
 - If asked something with no connection to insurance, claims, or this app, say that's outside what you can help with here
 
-This household's data:
+This household's data, including real extracted text from their most recently uploaded documents (use search_documents for anything older or not shown here):
 {household_context}
 
 General reference information (IRDAI facts already verified elsewhere in this app):
@@ -4115,9 +4154,61 @@ def format_inr(amount: float) -> str:
     return ",".join(groups) + "," + last_three
 
 
-def build_agent_household_context(policies: list[dict], claims: list[dict]) -> str:
-    if not policies and not claims:
-        return "No policies or claims added yet."
+def search_documents_locally(documents: list[dict], query: str) -> str:
+    """Cova's 'search_documents' tool - a simple keyword search across
+    documents already fetched for this request (no extra DB round-trip),
+    reaching beyond the ~20 most recent ones already summarized in the
+    baseline context. Returns a plain-text result the model can read
+    directly, since function results go back to Gemini as text/JSON, not
+    something a person sees formatted."""
+    if not query or not query.strip():
+        return "No search query provided."
+    terms = [t for t in query.lower().split() if len(t) > 2]
+    if not terms:
+        return "Search query too short to be useful."
+    matches = []
+    for d in documents:
+        haystack = f"{d.get('filename','')} {d.get('category','')} {d.get('extracted_text','')}".lower()
+        if any(term in haystack for term in terms):
+            matches.append(d)
+    if not matches:
+        return f"No documents matched '{query}'."
+    lines = [f"Found {len(matches)} matching document(s):"]
+    for d in matches[:8]:
+        label = DOCUMENT_CATEGORIES.get(d.get("category"), d.get("category", "document"))
+        excerpt = (d.get("extracted_text") or "")[:400].strip()
+        line = f"- id: {d.get('id')} | {d.get('filename')} ({label}"
+        if d.get("bill_amount"):
+            line += f", \u20B9{format_inr(d['bill_amount'])}"
+        if d.get("bill_date"):
+            line += f", {d['bill_date']}"
+        line += f") - excerpt: {excerpt}" if excerpt else ")"
+        lines.append(line)
+    if len(matches) > 8:
+        lines.append(f"...and {len(matches) - 8} more matches not shown - narrow the search if needed.")
+    return "\n".join(lines)
+
+
+async def get_document_full_text_tool(household_id: str, document_id: str) -> str:
+    """Cova's 'get_document_text' tool - the full extracted text of one
+    specific document, for when a search excerpt isn't enough to answer
+    confidently. Scoped to the household making the request, same as every
+    other document access in this app - Cova can never read another
+    household's documents."""
+    if not document_id:
+        return "No document_id provided."
+    doc = await db.documents.find_one({"id": document_id, "household_id": household_id}, {"_id": 0})
+    if not doc:
+        return "No document found with that id."
+    text = (doc.get("extracted_text") or "").strip()
+    if not text:
+        return f"'{doc.get('filename')}' has no extracted text available (OCR may still be processing, or it failed)."
+    return f"Full text of '{doc.get('filename')}':\n{text}"
+
+
+def build_agent_household_context(policies: list[dict], claims: list[dict], documents: list[dict]) -> str:
+    if not policies and not claims and not documents:
+        return "No policies, claims, or documents added yet."
     lines = []
     for p in policies:
         lines.append(f"- Policy: {p.get('insurer_name')} {p.get('policy_type')}, sum insured \u20B9{format_inr(p.get('sum_insured', 0))}, valid {p.get('start_date')} to {p.get('end_date')}")
@@ -4132,6 +4223,28 @@ def build_agent_household_context(policies: list[dict], claims: list[dict]) -> s
             lines.append(f"  Key exclusions: {', '.join(insights['key_exclusions'][:5])}")
     for c in claims:
         lines.append(f"- Claim {c.get('id', '')[:8]}: {c.get('type')} claim, status {c.get('status', 'in progress')}, title '{c.get('title')}'")
+
+    if documents:
+        lines.append("\nUploaded documents (most recent first - real extracted text, not just a filename):")
+        # Capped at the most recent 20 documents, and each excerpt capped at
+        # ~600 characters, so a household with years of accumulated documents
+        # doesn't blow up the context sent on every single message. A person
+        # can still ask about something older by name; this just bounds what
+        # gets included automatically by default.
+        for d in documents[:20]:
+            label = DOCUMENT_CATEGORIES.get(d.get("category"), d.get("category", "document"))
+            detail = f"- {d.get('filename')} ({label}"
+            if d.get("bill_amount"):
+                detail += f", \u20B9{format_inr(d['bill_amount'])}"
+            if d.get("bill_date"):
+                detail += f", {d['bill_date']}"
+            detail += ")"
+            lines.append(detail)
+            excerpt = (d.get("extracted_text") or "").strip()
+            if excerpt:
+                if len(excerpt) > 600:
+                    excerpt = excerpt[:600] + "…"
+                lines.append(f"  Extracted text: {excerpt}")
     return "\n".join(lines)
 
 
@@ -4147,40 +4260,18 @@ def build_agent_reference_context(regulatory_facts: dict) -> str:
     return "\n".join(lines)
 
 
-def ask_agent_with_gemini(message: str, history: list[dict], household_context: str, reference_context: str) -> str:
-    if not GEMINI_API_KEY:
-        raise AIAnalysisUnavailable("The assistant isn't configured on this server yet")
-    # Kept comfortably below typical gateway/proxy timeouts (commonly ~60s) -
-    # if Gemini itself is slow, this fails fast with a clean error Cova can
-    # show, rather than the connection hanging until an upstream gateway
-    # kills it with a bare, unhelpful 504.
-    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=20_000))
-    system_prompt = AGENT_SYSTEM_PROMPT.format(household_context=household_context, reference_context=reference_context)
-    contents = []
-    for turn in history:
-        contents.append(genai_types.Content(role="user" if turn["role"] == "user" else "model", parts=[genai_types.Part.from_text(text=turn["content"])]))
-    contents.append(genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=message)]))
-    config = genai_types.GenerateContentConfig(
-        system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048,
-        # A small, non-zero thinking budget (rather than exactly 0) is far
-        # more broadly accepted across model variants - some models reject 0
-        # outright.
-        thinking_config=genai_types.ThinkingConfig(thinking_budget=100),
-    )
-    # Gemini occasionally rejects a request with "503 UNAVAILABLE - currently
-    # experiencing high demand" - Google's own servers being temporarily
-    # overloaded, not a problem with the request itself. Confirmed from real
-    # production logs that this specific error comes back fast (not a slow
-    # hang), so one bounded retry is safe and worth doing, unlike blindly
-    # retrying every kind of failure.
+def _gemini_call_with_retry(client, model, contents, config):
+    """One Gemini turn, with the same bounded 503 retry used everywhere else
+    in this app - Google's own servers occasionally reject a request as
+    'temporarily overloaded', and that specific error is confirmed (from real
+    production logs) to come back fast, making one quick retry safe."""
     max_attempts = 2
     for attempt in range(max_attempts):
         try:
-            response = client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=config)
-            return response.text
+            return client.models.generate_content(model=model, contents=contents, config=config)
         except genai_errors.ServerError as exc:
             if attempt < max_attempts - 1:
-                logger.warning("Gemini server error on agent ask (attempt %d/%d), retrying: %s", attempt + 1, max_attempts, exc)
+                logger.warning("Gemini server error (attempt %d/%d), retrying: %s", attempt + 1, max_attempts, exc)
                 time.sleep(1)
                 continue
             raise AIAnalysisFailed(str(exc)) from exc
@@ -4188,42 +4279,144 @@ def ask_agent_with_gemini(message: str, history: list[dict], household_context: 
             raise AIAnalysisFailed(str(exc)) from exc
 
 
-@api_router.post("/agent/ask")
-async def agent_ask(input: AgentAskInput, user: dict = Depends(current_user)):
-    """The user-facing chat agent - answers using the household's own policy/
-    claim data plus the app's already-verified regulatory reference content,
-    always distinguishing which is which. Read-only: it can suggest what to
-    do, but never takes an action or changes any data itself."""
-    policies = await db.policies.find({"household_id": user["household_id"]}, {"_id": 0}).to_list(200)
-    claims = await db.claims.find({"household_id": user["household_id"]}, {"_id": 0}).to_list(200)
-    regulatory_facts = await get_effective_regulatory_facts()
+async def ask_agent_with_gemini(message: str, history: list[dict], household_context: str, reference_context: str, household_id: str, documents: list[dict]) -> str:
+    """Cova's real logic, in three stages, deliberately kept as separate
+    Gemini calls rather than one combined call:
+    1. A function-calling loop giving Cova two tools to look beyond the
+       document excerpts already in its context (search_documents,
+       get_document_text) - standard, well-established function calling.
+    2. If Cova's own answer ends with a specific NEEDS_WEB_SEARCH marker
+       (meaning it genuinely couldn't answer from the household's data), a
+       separate call using ONLY Google Search grounding - the same proven,
+       single-purpose pattern already used elsewhere in this app.
+    3. A short synthesis call turning raw search findings into a real answer.
+    Newer Gemini versions can combine custom tools and google_search in one
+    call, but that requires specific handling this app can't yet verify
+    works reliably - three separate, individually-proven calls achieves the
+    same result without depending on that."""
+    if not GEMINI_API_KEY:
+        raise AIAnalysisUnavailable("The assistant isn't configured on this server yet")
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=genai_types.HttpOptions(timeout=20_000))
+    system_prompt = AGENT_SYSTEM_PROMPT.format(household_context=household_context, reference_context=reference_context)
 
-    household_context = build_agent_household_context(policies, claims)
-    reference_context = build_agent_reference_context(regulatory_facts)
+    contents = []
+    for turn in history:
+        contents.append(genai_types.Content(role="user" if turn["role"] == "user" else "model", parts=[genai_types.Part.from_text(text=turn["content"])]))
+    contents.append(genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=message)]))
 
-    try:
-        answer = await asyncio.to_thread(
-            ask_agent_with_gemini, input.message, [h.model_dump() for h in input.history], household_context, reference_context,
+    document_tools = genai_types.Tool(function_declarations=[
+        genai_types.FunctionDeclaration(
+            name="search_documents",
+            description="Search this household's uploaded documents (bills, discharge summaries, policy wording, etc.) beyond what's already shown in your context - use this if the answer might be in an older or not-yet-summarized document.",
+            parameters_json_schema={"type": "object", "properties": {"query": {"type": "string", "description": "Keywords to search for"}}, "required": ["query"]},
+        ),
+        genai_types.FunctionDeclaration(
+            name="get_document_text",
+            description="Get the full extracted text of one specific document by its id - use after search_documents finds a document whose short excerpt isn't enough to answer confidently.",
+            parameters_json_schema={"type": "object", "properties": {"document_id": {"type": "string"}}, "required": ["document_id"]},
+        ),
+    ])
+    config = genai_types.GenerateContentConfig(
+        system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048,
+        thinking_config=genai_types.ThinkingConfig(thinking_budget=100),
+        tools=[document_tools],
+    )
+
+    # Bounded to 3 tool-use round-trips - enough for a real "search, then read
+    # the full text of what it found" sequence, without letting a confused
+    # model loop indefinitely and burn through the free tier's scarce daily
+    # quota on one single question.
+    final_text = None
+    for _ in range(3):
+        response = await asyncio.to_thread(_gemini_call_with_retry, client, GEMINI_MODEL, contents, config)
+        candidate = response.candidates[0] if response.candidates else None
+        function_calls = [p.function_call for p in candidate.content.parts if p.function_call] if candidate and candidate.content.parts else []
+        if not function_calls:
+            final_text = response.text
+            break
+        contents.append(candidate.content)
+        response_parts = []
+        for fc in function_calls:
+            if fc.name == "search_documents":
+                result = search_documents_locally(documents, (fc.args or {}).get("query", ""))
+            elif fc.name == "get_document_text":
+                result = await get_document_full_text_tool(household_id, (fc.args or {}).get("document_id", ""))
+            else:
+                result = "Unknown tool."
+            response_parts.append(genai_types.Part.from_function_response(name=fc.name, response={"result": result}))
+        contents.append(genai_types.Content(role="user", parts=response_parts))
+    if final_text is None:
+        # Loop exhausted without a plain-text answer - ask once more with no
+        # tools available, forcing a direct response instead of another call.
+        no_tools_config = genai_types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.3, max_output_tokens=2048)
+        response = await asyncio.to_thread(_gemini_call_with_retry, client, GEMINI_MODEL, contents, no_tools_config)
+        final_text = response.text
+
+    if final_text and final_text.strip().startswith("NEEDS_WEB_SEARCH:"):
+        search_query = final_text.strip()[len("NEEDS_WEB_SEARCH:"):].strip()
+        search_config = genai_types.GenerateContentConfig(temperature=0.2, tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())])
+        search_prompt = f"Search the web (including the relevant insurer's own website if one is named) and answer this: {search_query}"
+        search_response = await asyncio.to_thread(
+            _gemini_call_with_retry, client, GEMINI_MODEL,
+            [genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=search_prompt)])], search_config,
         )
-    except AIAnalysisUnavailable as exc:
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
-    except AIAnalysisFailed as exc:
-        logger.error("Agent ask failed: %s", exc)
-        raise HTTPException(status_code=502, detail="Couldn't get a response - try again") from exc
+        synthesis_prompt = (
+            f"A user asked: {message}\n\nThis wasn't in their own documents, so the web was searched. Findings:\n{search_response.text}\n\n"
+            "Write a short, clear final answer using these findings. Start by saying plainly that this came from a web search, "
+            "not their own documents (e.g. \"I couldn't find this in your documents, so I checked online:\")."
+        )
+        synthesis_config = genai_types.GenerateContentConfig(temperature=0.3, max_output_tokens=1024)
+        synthesis_response = await asyncio.to_thread(
+            _gemini_call_with_retry, client, GEMINI_MODEL,
+            [genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=synthesis_prompt)])], synthesis_config,
+        )
+        return synthesis_response.text
 
+    return final_text
+
+
+async def _ask_agent_and_save(message: str, history: list[dict], household_context: str, reference_context: str, household_id: str, documents: list[dict], user_id: str) -> str:
+    """Wraps the actual Gemini call so conversation history gets saved once
+    the background job completes - the endpoint itself returns immediately
+    with a job_id, so it can no longer save the conversation synchronously
+    the way it used to when this was one direct request/response."""
+    answer = await ask_agent_with_gemini(message, history, household_context, reference_context, household_id, documents)
     now = datetime.now(timezone.utc).isoformat()
-    # Persisted per-user (not shared across the household) - this is one
-    # person's own back-and-forth with the assistant, not household data.
-    # Capped at the most recent 50 messages so this can't grow unbounded.
     await db.agent_conversations.update_one(
-        {"user_id": user["id"]},
+        {"user_id": user_id},
         {"$push": {"messages": {"$each": [
-            {"role": "user", "content": input.message, "at": now},
+            {"role": "user", "content": message, "at": now},
             {"role": "assistant", "content": answer, "at": now},
         ], "$slice": -50}}},
         upsert=True,
     )
-    return {"answer": answer}
+    return answer
+
+
+@api_router.post("/agent/ask")
+async def agent_ask(input: AgentAskInput, background_tasks: BackgroundTasks, user: dict = Depends(current_user)):
+    """The user-facing chat agent - answers using the household's own policy/
+    claim/document data plus the app's already-verified regulatory reference
+    content, with tools to search further and fall back to a live web search
+    when genuinely needed. Runs as a background job (like policy analysis)
+    rather than one long request, since this can now involve several chained
+    Gemini calls - no single HTTP request needs to survive that whole chain."""
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=501, detail="The assistant isn't configured on this server yet")
+    policies = await db.policies.find({"household_id": user["household_id"]}, {"_id": 0}).to_list(200)
+    claims = await db.claims.find({"household_id": user["household_id"]}, {"_id": 0}).to_list(200)
+    documents = await db.documents.find({"household_id": user["household_id"]}, {"_id": 0}).sort("uploaded_at", -1).to_list(200)
+    regulatory_facts = await get_effective_regulatory_facts()
+
+    household_context = build_agent_household_context(policies, claims, documents)
+    reference_context = build_agent_reference_context(regulatory_facts)
+
+    job_id = await _start_ai_job(
+        background_tasks, user["household_id"], _ask_agent_and_save,
+        input.message, [h.model_dump() for h in input.history], household_context, reference_context,
+        user["household_id"], documents, user["id"],
+    )
+    return {"job_id": job_id, "status": "processing"}
 
 
 @api_router.get("/agent/conversation")
